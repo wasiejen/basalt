@@ -130,6 +130,16 @@ class ConfigFile(unittest.TestCase):
         self.assertEqual(flag_value(qfile, "--max-context"), "262144")     # slot-full-context
         self.assertEqual(flag_value(dfile, "--max-context"), "1048576")
 
+    def test_session_slot_pin_is_the_engines_switch(self):
+        """session-slot-pin in the engine section is an engine flag: true forwards the switch, false or absent
+        forwards nothing (an engine that has no such flag treats it as fatal)."""
+        def words(engine):
+            return model_settings(build_parser(), ["--config", conf({"engine": engine,
+                                                                    "models": [{"model": "a.basalt"}]})])[0][2]
+        self.assertIn("--session-slot-pin", words({"session-slot-pin": True}))
+        self.assertNotIn("--session-slot-pin", words({"session-slot-pin": False}))
+        self.assertNotIn("--session-slot-pin", words({}))
+
     def test_the_ram_reserve(self):
         p = conf({"engine": {"ram-reserve-mib": 4096}, "models": [{"model": "a.basalt"}, {"model": "b.basalt"}]})
         for _, _, words, _ in model_settings(build_parser(), ["--config", p]):

@@ -49,7 +49,7 @@ from serve.api.logprobs import REQUEST_KEY as LOGPROBS_KEY, engine_key as logpro
     token as logprob_token
 from serve.engine import lifeline, suspend
 from serve.engine.console import LINES as CONSOLE_LINES, ConsoleLines
-from serve.engine.flags import flag_value
+from serve.engine.flags import flag_index, flag_value
 from serve.engine.errors import EngineDied, EngineError, EngineSilent, EngineStartError, EngineStuck, WakeBlocked, split_err
 from serve.engine.slots import AdmissionQueue
 from serve.prompt import PromptText
@@ -269,6 +269,9 @@ class ProcessEngine:
                  env: dict | None = None, lazy: bool = False):
         self.spawn = (engine_bin, list(args), cwd, log, env)   # to start it again
         self.model_path = flag_value(args, "--model") or ""
+        # the server's slot pin: one identity per session, and a session never leaves the slot it owns (the
+        # engine's own switch, so the server and the engine can never disagree about it)
+        self.session_slot_pin = flag_index(args, "--session-slot-pin") is not None
         self.quit_s = QUIT_DISK_S if (flag_value(args, "--conversation-cache-disk-mib") or "0") != "0" else QUIT_S
         self.log_path = log
         self.proc, self.pump, self.log = None, None, None

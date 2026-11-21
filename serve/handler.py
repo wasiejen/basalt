@@ -81,10 +81,15 @@ def make_handler(target: Service | Router):
         # not here: x-client-request-id, which identifies one request and would give every turn a session of its own.
         SESSION_HEADERS = ("x-llm-flow-id", "x-claude-code-session-id", "x-session-id", "x-session-affinity",
                            "x-grok-conv-id", "x-grok-session-id")
+        PINNED_HEADERS = ("x-opencode-session-id", *SESSION_HEADERS)
+        # an OpenCode tree stamps both: x-opencode-session-id names one session, the affinity headers its
+        # root; the pin reads the per-session one, so a child is not keyed under the parent
 
         def _session_id(self, req) -> str | None:
-            """The conversation this request belongs to, or None when it names no session (admission is prompt-only)."""
-            for h in self.SESSION_HEADERS:
+            """The conversation this request belongs to, or None when it names no session (admission is prompt-only).
+            The engine's session-slot-pin reads the per-session header first; without it the order is unchanged."""
+            headers = self.PINNED_HEADERS if getattr(svc.engine, "session_slot_pin", False) else self.SESSION_HEADERS
+            for h in headers:
                 v = (self.headers.get(h) or "").strip()
                 if v:
                     return v
