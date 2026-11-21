@@ -266,12 +266,13 @@ class ProcessEngine:
         self.__dict__.setdefault("_ptl", threading.local()).state = None
 
     def __init__(self, engine_bin: str, args: list[str], cwd: str | None = None, log: str | None = None,
-                 env: dict | None = None, lazy: bool = False):
+                 env: dict | None = None, lazy: bool = False, slot_identity: tuple[str, ...] = ()):
         self.spawn = (engine_bin, list(args), cwd, log, env)   # to start it again
         self.model_path = flag_value(args, "--model") or ""
-        # the server's slot pin: one identity per session, and a session never leaves the slot it owns (the
-        # engine's own switch, so the server and the engine can never disagree about it)
-        self.session_slot_pin = flag_index(args, "--session-slot-pin") is not None
+        # the headers the server keys this engine's sessions by (conversation-cache-slot-identity): never an
+        # engine word, the engine carries them so the server reads the setting its engine was given
+        if "slot_identity" not in self.__dict__:     # a restart re-runs this with the same words, not with the
+            self.slot_identity = tuple(slot_identity or ())        # server's settings: keep what it first got
         self.quit_s = QUIT_DISK_S if (flag_value(args, "--conversation-cache-disk-mib") or "0") != "0" else QUIT_S
         self.log_path = log
         self.proc, self.pump, self.log = None, None, None

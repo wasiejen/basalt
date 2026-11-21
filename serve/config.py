@@ -25,7 +25,8 @@ ENTRY_OPTIONS = frozenset({"model", "alias"})
 MODEL_OPTIONS = frozenset({
     "gpu", "vision", "parallel", "slot-full-context", "idle-sleep", "idle-unload", "min-free-vram-mib", "fit-max-tokens",
     "grammar", "reasoning-effort", "reasoning-budget-tokens", "thinking-loop-tokens", "answer-room", "temperature", "top-p", "top-k", "min-p",
-    "presence-penalty", "frequency-penalty", "repetition-penalty", "penalty-last-n", "seed", "video-max-tokens"})
+    "presence-penalty", "frequency-penalty", "repetition-penalty", "penalty-last-n", "seed", "video-max-tokens",
+    "conversation-cache-slot-identity"})
 GRAMMAR_DEFAULT = True                      # the `grammar` option when neither the file nor the command line sets it
 
 
@@ -532,6 +533,16 @@ def video_tokens(text: str) -> int:
     return n
 
 
+def slot_identity(text: str) -> tuple[str, ...]:
+    """argparse type: conversation-cache-slot-identity, the request-header names the session key is read from,
+    in the order they are named (comma-separated; header names are case-insensitive, so they are kept lower).
+    Every header of the server's own order stays in play: the list says what to read FIRST."""
+    names = tuple(dict.fromkeys(n for n in (x.strip().lower() for x in str(text).split(",")) if n))
+    if not names:
+        raise argparse.ArgumentTypeError(f"expected header names to read first, like x-session-id, not {text!r}")
+    return names
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
                                  allow_abbrev=False)
@@ -641,4 +652,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="output tokens kept for closing the thinking and the answer: auto (a quarter of the cap, at "
                          "least 512, at most half) or a whole number of tokens (0 = none); an explicit request budget "
                          "of 0 opts out")
+    ap.add_argument("--conversation-cache-slot-identity", type=slot_identity, default=(), metavar="NAME[,...]",
+                    help="the request headers the session is read from, ahead of the server's own order and in this "
+                         "order (comma-separated; every header of that order stays in play: this chooses what to read "
+                         "first, it filters nothing)")
     return ap

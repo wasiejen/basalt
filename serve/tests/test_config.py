@@ -130,15 +130,25 @@ class ConfigFile(unittest.TestCase):
         self.assertEqual(flag_value(qfile, "--max-context"), "262144")     # slot-full-context
         self.assertEqual(flag_value(dfile, "--max-context"), "1048576")
 
-    def test_session_slot_pin_is_the_engines_switch(self):
-        """session-slot-pin in the engine section is an engine flag: true forwards the switch, false or absent
-        forwards nothing (an engine that has no such flag treats it as fatal)."""
-        def words(engine):
+    def test_the_slot_knobs_of_the_engine_section(self):
+        """conversation-cache-slot-pin is an engine switch, forwarded only when true (an engine that has no
+        such flag treats it as fatal); conversation-cache-slot-identity is the server's own reading order and
+        never reaches the engine. Left out, both are today: no switch, and the built-in order."""
+        def settings(engine):
             return model_settings(build_parser(), ["--config", conf({"engine": engine,
-                                                                    "models": [{"model": "a.basalt"}]})])[0][2]
-        self.assertIn("--session-slot-pin", words({"session-slot-pin": True}))
-        self.assertNotIn("--session-slot-pin", words({"session-slot-pin": False}))
-        self.assertNotIn("--session-slot-pin", words({}))
+                                                                    "models": [{"model": "a.basalt"}]})])[0]
+        a = settings({"conversation-cache-slot-pin": True})
+        self.assertIn("--conversation-cache-slot-pin", a[2] + a[3])
+        self.assertEqual(a[0].conversation_cache_slot_identity, ())
+        for engine in ({"conversation-cache-slot-pin": False}, {}):
+            a = settings(engine)
+            self.assertNotIn("--conversation-cache-slot-pin", a[2] + a[3])
+            self.assertEqual(a[0].conversation_cache_slot_identity, (), str(engine))
+        a = settings({"conversation-cache-slot-identity": "X-Session-Id, x-opencode-session-id,x-session-id"})
+        self.assertEqual(a[0].conversation_cache_slot_identity, ("x-session-id", "x-opencode-session-id"))
+        for words in (a[2], a[3]):
+            self.assertNotIn("--conversation-cache-slot-identity", words)
+            self.assertNotIn("x-opencode-session-id", words)
 
     def test_the_ram_reserve(self):
         p = conf({"engine": {"ram-reserve-mib": 4096}, "models": [{"model": "a.basalt"}, {"model": "b.basalt"}]})

@@ -27,6 +27,11 @@ slot by the longest shared prefix, then the least recently used. When the sessio
 and the session's slot becomes the new one. Claude Code sends one `x-claude-code-session-id` for a session and its parallel
 subagents, so their overlapping requests spread over slots.
 
+`conversation-cache-slot-identity` (a setting of the `engine` section) says which headers to read ahead of that list,
+in the order it names them: a header of the list above moves to its front, one the server does not know is read before
+all of them, and none of them stops being read, so the setting orders the read instead of filtering it. Unset, the
+order above is what the server reads.
+
 ### Prompts beside decoding slots
 
 A prompt of up to 16,384 tokens is read at once, and the slots wait a few seconds. A longer one is read beside them, on its own thread,

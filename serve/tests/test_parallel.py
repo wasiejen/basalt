@@ -15,7 +15,8 @@ from unittest import mock
 
 from serve.frontend import ChatTemplate
 from serve.engine.process import ProcessEngine
-from serve.handler import serve
+from serve.config import slot_identity
+from serve.handler import serve, slot_header_order
 from serve.service import Service
 from serve.util.text import ByteTokenizer
 
@@ -313,14 +314,15 @@ class ParallelService(unittest.TestCase):
     """The real ProcessEngine and Service over HTTP, the fake engine behind them."""
 
     def start(self, slots, fit=None, slot_cache=False, fail=False, ready=None, multi=None, drafts=False, counts=False,
-              nopp=False, reuse=False, slot0_solo=False, solo_any=False, pms=False, windows=False, pin=False):
+              nopp=False, reuse=False, slot0_solo=False, solo_any=False, pms=False, windows=False, pin=False,
+              identity=None):
         self.tmp = tempfile.TemporaryDirectory()
         script = Path(self.tmp.name) / "fake_engine.py"
         script.write_text(FAKE_BATCH, encoding="utf-8")
         self.log = Path(self.tmp.name) / "requests.log"
         real = subprocess.Popen
         extra = ["--batch", str(slots)] + (["--fit", str(fit)] if fit is not None else []) + ["--log", str(self.log)]
-        extra += ["--session-slot-pin"] if pin else []
+        extra += ["--conversation-cache-slot-pin"] if pin else []
         extra += ["--slotcache"] if slot_cache else []
         extra += ["--fail-window"] if fail else []
         extra += ["--bdone-drafts"] if drafts else []
@@ -335,7 +337,8 @@ class ParallelService(unittest.TestCase):
         extra += ["--windows"] if windows else []
         with mock.patch.object(subprocess, "Popen",
                                lambda cmd, **kw: real([sys.executable, str(script), *cmd[1:]], **kw)):
-            self.engine = ProcessEngine("basalt", extra)
+            self.engine = ProcessEngine("basalt", extra,
+                                    slot_identity=slot_identity(identity) if identity else ())
         tok = ByteTokenizer()
         self.svc = Service(self.engine, tok, ChatTemplate.from_file(Path(__file__).resolve().parents[1] / "chat_template.jinja"))
         self.httpd = serve(self.svc, port=0)
@@ -977,17 +980,24 @@ class ParallelService(unittest.TestCase):
                   "x-grok-conv-id", "x-grok-session-id"):
             self.assertIn("s-" + h, self.engine.session_slot, h)
 
-    def test_a_pinned_session_is_keyed_by_its_own_id(self):
-        """session-slot-pin: a client stamps both a per-session id and the shared affinity id of its tree; the
-        pinned server keys each session by its own, so two of one tree hold two slots."""
-        self.start(3, pin=True)
+    def test_the_identity_knob_keys_by_the_named_header(self):
+        """conversation-cache-slot-identity: a client stamps a per-session header beside the shared affinity
+        header of its whole tree; the named one keys, so two sessions of one tree hold two slots."""
+        self.start(3, identity="x-opencode-session-id")
         self.together([lambda: self.chat_session("alpha " * 10, {"x-session-id": "root", "x-opencode-session-id": "kid"}),
                        lambda: self.chat_session("beta " * 14, {"x-session-id": "root", "x-opencode-session-id": "kin"})])
         self.assertEqual(set(self.engine.session_slot), {"kid", "kin"})
 
-    def test_the_shared_affinity_id_keys_without_the_pin(self):
-        """The negative control: with no pin the first header of SESSION_HEADERS wins, so two sessions of one
-        tree share a key and one slot."""
+    def test_a_listed_default_header_moves_ahead_of_the_default_first(self):
+        """A header of the server's own order named by the knob is read before the rest of that order."""
+        self.start(3, identity="x-session-id")
+        self.together([lambda: self.chat_session("alpha " * 10, {"x-llm-flow-id": "flow", "x-session-id": "sess"}),
+                       lambda: self.chat_session("beta " * 14, {"x-llm-flow-id": "flow2", "x-session-id": "sess2"})])
+        self.assertEqual(set(self.engine.session_slot), {"sess", "sess2"})
+
+    def test_the_shared_affinity_id_keys_without_the_identity_knob(self):
+        """No conversation-cache-slot-identity: the server reads its own order, so both of a tree's sessions
+        share the shared affinity value and one slot."""
         self.start(3)
         self.together([lambda: self.chat_session("alpha " * 10, {"x-session-id": "root", "x-opencode-session-id": "kid"}),
                        lambda: self.chat_session("beta " * 14, {"x-session-id": "root", "x-opencode-session-id": "kin"})])
@@ -1075,10 +1085,6 @@ class ParallelService(unittest.TestCase):
 class SessionAffinity(PickSlot):
     """A session header keeps a conversation in its own slot, so the next turn continues the K/V already there."""
 
-    def test_the_pin_defaults_off_and_the_engine_switch_turns_it_on(self):
-        self.assertFalse(ProcessEngine("missing-executable", [], lazy=True).session_slot_pin)
-        self.assertTrue(ProcessEngine("missing-executable", ["--session-slot-pin"], lazy=True).session_slot_pin)
-
     def test_a_repeated_session_takes_its_own_slot(self):
         e = self.engine(3)
         self.hold(e, [[1, 2, 3, 4], [9, 9], [1, 2]])
@@ -1089,6 +1095,19 @@ class SessionAffinity(PickSlot):
         self.assertEqual(self.pick(e, [1, 2, 3, 4, 5], session="s1"), 1)
         self.assertEqual(e.session_slot, {"s1": 1})
         self.assertEqual(e.slot_owner, {1: "s1"})
+
+    def test_the_identity_knob_orders_the_read_and_filters_nothing(self):
+        """conversation-cache-slot-identity moves the names it lists to the front, each read once, and every
+        header of the server's own order stays behind them in its place."""
+        self.assertEqual(slot_header_order(("x-opencode-session-id",)),
+                         ("x-opencode-session-id", "x-llm-flow-id", "x-claude-code-session-id", "x-session-id",
+                          "x-session-affinity", "x-grok-conv-id", "x-grok-session-id"))
+        self.assertEqual(slot_header_order(("x-session-id", "x-grok-conv-id")),
+                         ("x-session-id", "x-grok-conv-id", "x-llm-flow-id", "x-claude-code-session-id",
+                          "x-session-affinity", "x-grok-session-id"))    # moved, and neither read twice
+        self.assertEqual(slot_header_order(),
+                         ("x-llm-flow-id", "x-claude-code-session-id", "x-session-id", "x-session-affinity",
+                          "x-grok-conv-id", "x-grok-session-id"))        # unset: the order today
 
     def test_another_sessions_slot_is_taken_only_when_no_unowned_one_is_free(self):
         e = self.engine(3)

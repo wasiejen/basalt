@@ -60,9 +60,27 @@ def _size_text(n: int) -> str:
     return f"{n >> 20} MiB" if n >= 1 << 20 else f"{n >> 10} KiB"
 
 
+# a request's session identity, the headers a load balancer names its flows by (tinyllb's order), then the
+# request body's own field; the slot the engine runs a conversation in follows it.  The grok build CLI names
+# its conversations with x-grok-conv-id / x-grok-session-id on every request, to any base URL.  Deliberately
+# not here: x-client-request-id, which identifies one request and would give every turn a session of its own.
+SESSION_HEADERS = ("x-llm-flow-id", "x-claude-code-session-id", "x-session-id", "x-session-affinity",
+                   "x-grok-conv-id", "x-grok-session-id")
+
+
+def slot_header_order(read_first: tuple[str, ...] = ()) -> tuple[str, ...]:
+    """The headers the session key is read from, in order: the names `conversation-cache-slot-identity` lists,
+    in the order it lists them, then SESSION_HEADERS as it stands with those names taken out (a name is read
+    once, wherever it came from).  The knob orders the read and never filters: every header of SESSION_HEADERS
+    stays in play, so a request that names only one of them is keyed by it either way."""
+    return (*read_first, *(h for h in SESSION_HEADERS if h not in read_first)) if read_first else SESSION_HEADERS
+
+
 def make_handler(target: Service | Router):
     router = target if isinstance(target, Router) else Router([target])
     svc = router.front                                      # the settings every model shares
+    # the headers this server keys sessions by, in order: the engine's conversation-cache-slot-identity first
+    header_order = slot_header_order(getattr(svc.engine, "slot_identity", ()))
 
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.0"                       # SSE ends by closing the connection
@@ -75,21 +93,10 @@ def make_handler(target: Service | Router):
         sse_open = False                                    # the stream's headers went out
         live = None                                         # this request's entry in router.live (answer now)
 
-        # a request's session identity, the headers a load balancer names its flows by (tinyllb's order), then the
-        # request body's own field; the slot the engine runs a conversation in follows it.  The grok build CLI names
-        # its conversations with x-grok-conv-id / x-grok-session-id on every request, to any base URL.  Deliberately
-        # not here: x-client-request-id, which identifies one request and would give every turn a session of its own.
-        SESSION_HEADERS = ("x-llm-flow-id", "x-claude-code-session-id", "x-session-id", "x-session-affinity",
-                           "x-grok-conv-id", "x-grok-session-id")
-        PINNED_HEADERS = ("x-opencode-session-id", *SESSION_HEADERS)
-        # an OpenCode tree stamps both: x-opencode-session-id names one session, the affinity headers its
-        # root; the pin reads the per-session one, so a child is not keyed under the parent
-
         def _session_id(self, req) -> str | None:
             """The conversation this request belongs to, or None when it names no session (admission is prompt-only).
-            The engine's session-slot-pin reads the per-session header first; without it the order is unchanged."""
-            headers = self.PINNED_HEADERS if getattr(svc.engine, "session_slot_pin", False) else self.SESSION_HEADERS
-            for h in headers:
+            `conversation-cache-slot-identity` says which headers to read first; unset, the order is the server's own."""
+            for h in header_order:
                 v = (self.headers.get(h) or "").strip()
                 if v:
                     return v
