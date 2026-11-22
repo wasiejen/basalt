@@ -258,6 +258,8 @@ def model_settings(ap: argparse.ArgumentParser, cli: list[str], refused=None) ->
         kept, skipped = [], []
         for group in engine_groups(entry.shared_words):
             if refused is not None and refused(entry.path, group):
+                if group[0][2:] in SERVER_READ_ENGINE_WORDS:
+                    raise ValueError(f"{entry.path}: {group[0]} is not an engine flag")   # ruled: the pin never skips
                 skipped.append(group[0])
             else:
                 kept += group

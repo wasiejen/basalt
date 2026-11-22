@@ -172,6 +172,14 @@ class ConfigFile(unittest.TestCase):
         self.assertTrue(ProcessEngine("missing-executable", file_words, lazy=True,
                                       slot_pin=a.conversation_cache_slot_pin).slot_pin)
 
+    def test_a_pre_rebuild_engine_refuses_the_pin_instead_of_skipping_it(self):
+        """The ruled UX (2026-11-22): an engine binary without the flag fails the start naming the flag -
+        the pin word is never one of the per-model skipped ones, the way every other top-level word is."""
+        with self.assertRaisesRegex(ValueError, r"--conversation-cache-slot-pin is not an engine flag"):
+            model_settings(build_parser(), ["--config", conf(
+                {"engine": {"conversation-cache-slot-pin": True}, "models": [{"model": "a.basalt"}]})],
+                refused=lambda path, group: True)
+
     def test_the_ram_reserve(self):
         p = conf({"engine": {"ram-reserve-mib": 4096}, "models": [{"model": "a.basalt"}, {"model": "b.basalt"}]})
         for _, _, words, _ in model_settings(build_parser(), ["--config", p]):
