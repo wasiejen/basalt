@@ -373,6 +373,46 @@ int main() {
                   cache.best(std::vector<int64_t>{5, 6, 7, 8}, {}, true).tokens == 0,
               "pin on: the oversized idle park is refused and the cache stays put");
     }
+    {   // toggled off on a live cache holding charged bytes: the f63e3e21 split returns, no rebuild needed
+        const size_t one = image({1, 2, 3}).bytes();
+        ConversationCache cache(one * 3, 8);
+        cache.set_slot_pin(true);
+        cache.put_slot(image({9, 8, 7}), 4);
+        cache.put(image({1, 2, 3}));
+        check(cache.bytes() == one * 2 && cache.slot_size() == 1, "toggle: both kinds charged while the pin is on");
+        cache.set_slot_pin(false);
+        check(cache.put(image({5, 6, 7})) && cache.put(image({7, 7, 7})), "toggle off: budgeted parks keep coming");
+        check(cache.size() == 4 && cache.slot_size() == 1 && cache.bytes() == one * 4 &&
+                  cache.best(b, {}, true).tokens == 3,
+              "toggle off: the idle entry left the budget again and pressure spared it while the total passed the cap");
+        cache.put_slot(image({4, 4, 4}), 1);   // the caller's count caps the idle kind again
+        check(cache.slot_size() == 1 && cache.size() == 4 && cache.best(b, {}, true).tokens == 0,
+              "toggle off: keep is back in force and the oldest idle entry leaves");
+    }
+    {   // pin on: take() and clear() give the shared counters back, spill catches the cross-kind evictions,
+        // and a count cap below the batch width (slots < parallel) bites on every park
+        const size_t one = image({1, 2, 3}).bytes();
+        ConversationCache cache(one * 4, 2);
+        cache.set_slot_pin(true);
+        cache.set_spill(true);
+        cache.put_slot(image({9, 8, 7}), 4);
+        cache.put(image({1, 2, 3}));
+        const auto taken_ids = cache.best(a, {}, true).index;
+        auto taken = cache.take(taken_ids);   // the budgeted one leaves shared accounting
+        check(cache.size() == 1 && cache.bytes() == one && !taken.from_slot && cache.slot_size() == 1,
+              "pin on: take gives a budgeted entry back across kinds");
+        cache.put(std::move(taken));
+        check(cache.put(image({5, 6, 7})), "pin on: the count cap below the batch width bites on every park");
+        const auto spilled = cache.take_spilled();
+        check(spilled.size() == 1 && spilled[0].live.ids == std::vector<int32_t>({9, 8, 7}) &&
+                  cache.slot_size() == 0 && cache.size() == 2 && cache.slot_bytes() == 0,
+              "pin on: the evicted idle kind waits in the tier below, counters given back");
+        const size_t held = cache.bytes();
+        check(cache.clear() == held && cache.size() == 0 && cache.bytes() == 0 &&
+                  cache.slot_size() == 0 && cache.slot_bytes() == 0,
+              "pin on: clear gives every kind's counters back");
+        check(cache.take_spilled().size() == 2, "pin on: the cleared conversations join the tier below");
+    }
     {
         // layer-split parking: checkpoints moved apart into stage parts and put back, no running state copied
         auto running = [](std::initializer_list<int32_t> ids, uint8_t salt, size_t parts) {
