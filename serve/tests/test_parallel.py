@@ -323,7 +323,6 @@ class ParallelService(unittest.TestCase):
         self.log = Path(self.tmp.name) / "requests.log"
         real = subprocess.Popen
         extra = ["--batch", str(slots)] + (["--fit", str(fit)] if fit is not None else []) + ["--log", str(self.log)]
-        extra += ["--conversation-cache-slot-pin"] if pin else []
         extra += ["--slotcache"] if slot_cache else []
         extra += ["--fail-window"] if fail else []
         extra += ["--bdone-drafts"] if drafts else []
@@ -338,7 +337,7 @@ class ParallelService(unittest.TestCase):
         extra += ["--windows"] if windows else []
         with mock.patch.object(subprocess, "Popen",
                                lambda cmd, **kw: real([sys.executable, str(script), *cmd[1:]], **kw)):
-            self.engine = ProcessEngine("basalt", extra,
+            self.engine = ProcessEngine("basalt", extra, slot_pin=pin,
                                     slot_identity=slot_identity(identity) if identity else ())
         tok = ByteTokenizer()
         self.svc = Service(self.engine, tok, ChatTemplate.from_file(Path(__file__).resolve().parents[1] / "chat_template.jinja"))
@@ -1112,7 +1111,7 @@ class SessionAffinity(PickSlot):
 
     def test_the_pin_defaults_off_and_the_engine_switch_turns_it_on(self):
         self.assertFalse(ProcessEngine("missing-executable", [], lazy=True).slot_pin)
-        self.assertTrue(ProcessEngine("missing-executable", ["--conversation-cache-slot-pin"], lazy=True).slot_pin)
+        self.assertTrue(ProcessEngine("missing-executable", [], lazy=True, slot_pin=True).slot_pin)
 
     def test_a_repeated_session_takes_its_own_slot(self):
         e = self.engine(3)
@@ -1134,6 +1133,9 @@ class SessionAffinity(PickSlot):
         self.assertEqual(slot_header_order(("x-session-id", "x-grok-conv-id")),
                          ("x-session-id", "x-grok-conv-id", "x-llm-flow-id", "x-claude-code-session-id",
                           "x-session-affinity", "x-grok-session-id"))    # moved, and neither read twice
+        self.assertEqual(slot_header_order(("X-Session-Id", "x-session-id", "x-session-id")),
+                         ("x-session-id", "x-llm-flow-id", "x-claude-code-session-id", "x-session-affinity",
+                          "x-grok-conv-id", "x-grok-session-id"))  # listed as it pleases: still read once
         self.assertEqual(slot_header_order(),
                          ("x-llm-flow-id", "x-claude-code-session-id", "x-session-id", "x-session-affinity",
                           "x-grok-conv-id", "x-grok-session-id"))        # unset: the order today

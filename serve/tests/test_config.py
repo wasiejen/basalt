@@ -17,6 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from serve.config import (  # noqa: E402
     CONFIG_VERSION,
+    ENGINE_SERVER_OPTIONS,
     ENGINE_VALUE_FORMS,
     ENTRY_OPTIONS,
     MODEL_OPTIONS,
@@ -64,6 +65,8 @@ def v2(cfg: dict) -> dict:
         name = key.replace("_", "-").removeprefix("--")
         if name in ENTRY_OPTIONS or name in MODEL_OPTIONS:
             entry[key] = value
+        elif name in ENGINE_SERVER_OPTIONS:
+            shared[key] = value
         else:
             server[key] = value
     return {"version": CONFIG_VERSION, "models": [entry], "server": server, "engine": shared}
@@ -131,24 +134,38 @@ class ConfigFile(unittest.TestCase):
         self.assertEqual(flag_value(dfile, "--max-context"), "1048576")
 
     def test_the_slot_knobs_of_the_engine_section(self):
-        """conversation-cache-slot-pin is an engine switch, forwarded only when true (an engine that has no
-        such flag treats it as fatal); conversation-cache-slot-identity is the server's own reading order and
-        never reaches the engine. Left out, both are today: no switch, and the built-in order."""
+        """Both slot knobs of the engine section are settings of the whole server: they reach the server's own
+        options, never the engine's argv (the engine knows neither flag), and no model entry may set one.
+        Left out, both are today: no pin, and the built-in header order."""
         def settings(engine):
             return model_settings(build_parser(), ["--config", conf({"engine": engine,
                                                                     "models": [{"model": "a.basalt"}]})])[0]
-        a = settings({"conversation-cache-slot-pin": True})
-        self.assertIn("--conversation-cache-slot-pin", a[2] + a[3])
-        self.assertEqual(a[0].conversation_cache_slot_identity, ())
-        for engine in ({"conversation-cache-slot-pin": False}, {}):
-            a = settings(engine)
-            self.assertNotIn("--conversation-cache-slot-pin", a[2] + a[3])
-            self.assertEqual(a[0].conversation_cache_slot_identity, (), str(engine))
-        a = settings({"conversation-cache-slot-identity": "X-Session-Id, x-opencode-session-id,x-session-id"})
+        a = settings({"conversation-cache-slot-pin": True,
+                      "conversation-cache-slot-identity": "X-Session-Id, x-opencode-session-id,x-session-id"})
+        self.assertTrue(a[0].conversation_cache_slot_pin)
         self.assertEqual(a[0].conversation_cache_slot_identity, ("x-session-id", "x-opencode-session-id"))
         for words in (a[2], a[3]):
-            self.assertNotIn("--conversation-cache-slot-identity", words)
-            self.assertNotIn("x-opencode-session-id", words)
+            for word in ("--conversation-cache-slot-pin", "--conversation-cache-slot-identity",
+                         "x-opencode-session-id", "x-session-id"):
+                self.assertNotIn(word, words)
+        a = settings({})
+        self.assertFalse(a[0].conversation_cache_slot_pin)
+        self.assertEqual(a[0].conversation_cache_slot_identity, ())
+        for key in ("conversation-cache-slot-identity", "conversation-cache-slot-pin"):
+            with self.assertRaisesRegex(ValueError, "the whole server reads it once"):
+                model_settings(build_parser(), ["--config", conf({"models": [{"model": "a.basalt", key: True}]})])
+
+    def test_a_configured_pin_reaches_the_engine_and_not_its_argv(self):
+        """The pin set in the config file reaches the engine the way the server builds one, and the word never
+        enters the engine's argv: an engine that has no such flag still starts with the pin on."""
+        from serve.engine.process import ProcessEngine
+        a, _, file_words, cli_words = model_settings(build_parser(), ["--config", conf(
+            {"engine": {"conversation-cache-slot-pin": True}, "models": [{"model": "a.basalt"}]})])[0]
+        self.assertTrue(a.conversation_cache_slot_pin)
+        self.assertNotIn("--conversation-cache-slot-pin", file_words + cli_words)
+        self.assertFalse(ProcessEngine("missing-executable", file_words, lazy=True).slot_pin)
+        self.assertTrue(ProcessEngine("missing-executable", [], lazy=True,
+                                      slot_pin=a.conversation_cache_slot_pin).slot_pin)
 
     def test_the_ram_reserve(self):
         p = conf({"engine": {"ram-reserve-mib": 4096}, "models": [{"model": "a.basalt"}, {"model": "b.basalt"}]})

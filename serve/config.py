@@ -25,8 +25,9 @@ ENTRY_OPTIONS = frozenset({"model", "alias"})
 MODEL_OPTIONS = frozenset({
     "gpu", "vision", "parallel", "slot-full-context", "idle-sleep", "idle-unload", "min-free-vram-mib", "fit-max-tokens",
     "grammar", "reasoning-effort", "reasoning-budget-tokens", "thinking-loop-tokens", "answer-room", "temperature", "top-p", "top-k", "min-p",
-    "presence-penalty", "frequency-penalty", "repetition-penalty", "penalty-last-n", "seed", "video-max-tokens",
-    "conversation-cache-slot-identity"})
+    "presence-penalty", "frequency-penalty", "repetition-penalty", "penalty-last-n", "seed", "video-max-tokens"})
+# the engine section's settings the WHOLE SERVER reads: no model picks its own, and they are never engine words
+ENGINE_SERVER_OPTIONS = frozenset({"conversation-cache-slot-identity", "conversation-cache-slot-pin"})
 GRAMMAR_DEFAULT = True                      # the `grammar` option when neither the file nor the command line sets it
 
 
@@ -209,7 +210,7 @@ def load_config_file(path: str, ap: argparse.ArgumentParser) -> ConfigFile:
         name = config_name(key)
         if name in ENTRY_OPTIONS:
             raise ValueError(f"engine.{key}: set it in a model entry")
-        if name in MODEL_OPTIONS:
+        if name in MODEL_OPTIONS or name in ENGINE_SERVER_OPTIONS:
             shared_argv += option_words("engine", key, value, known[name], here)
         elif name in known:
             raise ValueError(f'engine.{key}: a server option, set it under "server"')
@@ -225,6 +226,8 @@ def load_config_file(path: str, ap: argparse.ArgumentParser) -> ConfigFile:
             name = config_name(key)
             if name in ENTRY_OPTIONS or name in MODEL_OPTIONS:
                 out.argv += option_words(where, key, value, known[name], here)
+            elif name in ENGINE_SERVER_OPTIONS:
+                raise ValueError(f"{where}.{key}: the whole server reads it once, set it under \"engine\"")
             elif name in known:
                 raise ValueError(f'{where}.{key}: a server option, set it under "server"')
             else:
@@ -652,6 +655,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="output tokens kept for closing the thinking and the answer: auto (a quarter of the cap, at "
                          "least 512, at most half) or a whole number of tokens (0 = none); an explicit request budget "
                          "of 0 opts out")
+    ap.add_argument("--conversation-cache-slot-pin", action="store_true",
+                    help="keep a session to the slot it owns: when that slot is busy its request waits there "
+                         "instead of taking another one")
     ap.add_argument("--conversation-cache-slot-identity", type=slot_identity, default=(), metavar="NAME[,...]",
                     help="the request headers the session is read from, ahead of the server's own order and in this "
                          "order (comma-separated; every header of that order stays in play: this chooses what to read "

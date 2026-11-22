@@ -49,7 +49,7 @@ from serve.api.logprobs import REQUEST_KEY as LOGPROBS_KEY, engine_key as logpro
     token as logprob_token
 from serve.engine import lifeline, suspend
 from serve.engine.console import LINES as CONSOLE_LINES, ConsoleLines
-from serve.engine.flags import flag_index, flag_value
+from serve.engine.flags import flag_value
 from serve.engine.errors import EngineDied, EngineError, EngineSilent, EngineStartError, EngineStuck, WakeBlocked, split_err
 from serve.engine.slots import AdmissionQueue
 from serve.prompt import PromptText
@@ -266,15 +266,17 @@ class ProcessEngine:
         self.__dict__.setdefault("_ptl", threading.local()).state = None
 
     def __init__(self, engine_bin: str, args: list[str], cwd: str | None = None, log: str | None = None,
-                 env: dict | None = None, lazy: bool = False, slot_identity: tuple[str, ...] = ()):
+                 env: dict | None = None, lazy: bool = False, slot_identity: tuple[str, ...] = (),
+                 slot_pin: bool = False):
         self.spawn = (engine_bin, list(args), cwd, log, env)   # to start it again
         self.model_path = flag_value(args, "--model") or ""
-        # the two slot knobs, both read off the words this engine was given: the pin keeps a session to the slot
-        # it owns (the engine's own switch, forwarded only when set), and the identity names say which headers the
-        # server keyed that session by (its own setting, never an engine word)
-        self.slot_pin = flag_index(args, "--conversation-cache-slot-pin") is not None
-        if "slot_identity" not in self.__dict__:     # a restart re-runs this with the same words, not with the
-            self.slot_identity = tuple(slot_identity or ())        # server's settings: keep what it first got
+        # the two slot knobs, both the server's own settings handed over at construction (the engine knows
+        # neither of them as a flag): the pin keeps a session to the slot it owns, and the identity names say
+        # which headers the server keyed its sessions by
+        if "slot_pin" not in self.__dict__:         # a restart re-runs this with the same words, not with
+            self.slot_pin = bool(slot_pin)           # the server's settings: keep what it first got
+        if "slot_identity" not in self.__dict__:
+            self.slot_identity = tuple(slot_identity or ())
         self.quit_s = QUIT_DISK_S if (flag_value(args, "--conversation-cache-disk-mib") or "0") != "0" else QUIT_S
         self.log_path = log
         self.proc, self.pump, self.log = None, None, None
@@ -1305,8 +1307,10 @@ class ProcessEngine:
                                         holding = False
                                         self.slot_cv.notify_all()
                                     self._pin_hold(session)       # the slot it sleeps on is nobody else's
-                                    self.slot_cv.wait(timeout=10.0)
-                                    self._pin_release(session)
+                                    try:                            # ...and lets go of it however the wait ends
+                                        self.slot_cv.wait(timeout=10.0)
+                                    finally:
+                                        self._pin_release(session)
                                     if cancel.is_set():
                                         return
                             finally:

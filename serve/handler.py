@@ -71,9 +71,11 @@ SESSION_HEADERS = ("x-llm-flow-id", "x-claude-code-session-id", "x-session-id", 
 def slot_header_order(read_first: tuple[str, ...] = ()) -> tuple[str, ...]:
     """The headers the session key is read from, in order: the names `conversation-cache-slot-identity` lists,
     in the order it lists them, then SESSION_HEADERS as it stands with those names taken out (a name is read
-    once, wherever it came from).  The knob orders the read and never filters: every header of SESSION_HEADERS
-    stays in play, so a request that names only one of them is keyed by it either way."""
-    return (*read_first, *(h for h in SESSION_HEADERS if h not in read_first)) if read_first else SESSION_HEADERS
+    once, wherever it came from, as HTTP names are read case-insensitively).  The knob orders the read and
+    never filters: every header of SESSION_HEADERS stays in play, so a request that names only one of them is
+    keyed by it either way."""
+    read = tuple(dict.fromkeys(h.lower() for h in read_first))
+    return (*read, *(h for h in SESSION_HEADERS if h not in read)) if read else SESSION_HEADERS
 
 
 def make_handler(target: Service | Router):
