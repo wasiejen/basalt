@@ -1300,7 +1300,8 @@ class ProcessEngine:
                             try:
                                 while True:
                                     slot = self.pick_slot(meets(), size(), session)
-                                    if slot is not None and self.admission.may_go(ticket, self._resumes(slot, meets(), size())):
+                                    waiting_for_slot = slot is None
+                                    if not waiting_for_slot and self.admission.may_go(ticket, self._resumes(slot, meets(), size())):
                                         self.slot_busy[slot] = True
                                         self.claim_slot(slot, session)
                                         break
@@ -1311,11 +1312,7 @@ class ProcessEngine:
                                         self.ctl.release()
                                         holding = False
                                         self.slot_cv.notify_all()
-                                    self._pin_hold(session)       # the slot it sleeps on is nobody else's
-                                    try:                            # ...and lets go of it however the wait ends
-                                        self.slot_cv.wait(timeout=10.0)
-                                    finally:
-                                        self._pin_release(session)
+                                    self._pin_sleep(session, waiting_for_slot)   # _pin_sleep: only a slot wait holds
                                     if cancel.is_set():
                                         return
                             finally:
@@ -1596,10 +1593,10 @@ class ProcessEngine:
 
     def _pin_hold(self, session: str | None) -> None:
         """Keeps a waiting request's own slot out of other sessions' picks (caller holds slot_cv, and only
-        while the pin is on): held while its own slot is BUSY with a turn of its own, and while it is IDLE
-        with the request still queued at admission - in that window an other session's pick would take the
-        idle own slot, and the same conversation would end up parked in it while resuming in another. The
-        owner's own pick is unaffected: pick_slot returns an owner its own slot before the holds filter."""
+        while the pin is on): the hold covers the window in which the own slot - BUSY now with a turn of
+        its own - goes idle while its owner sleeps, so the wake-up finds its K/V where it left it instead
+        of another session's conversation parked in it. _pin_sleep decides which sleeps hold. The owner's
+        own pick is unaffected: pick_slot returns an owner its own slot before the holds filter."""
         if self.slot_pin and session is not None:
             own = self.session_slot.get(session)
             if own is not None and 0 <= own < len(self.slot_busy):
@@ -1614,6 +1611,23 @@ class ProcessEngine:
                 self.pin_wait[session] = n
             else:
                 del self.pin_wait[session]
+
+    def _pin_sleep(self, session: str | None, waiting_for_slot: bool) -> None:
+        """The admission lane's sleep (caller holds slot_cv): wait on the lane's condition, holding the
+        session's own slot out of other sessions' picks only while the sleep waits FOR A SLOT. A sleep that
+        already saw a slot waits for the admission lane alone: the queue in front of it can run for a whole
+        turn, and an own IDLE slot held through that stands empty with nobody able to use it - a bounded
+        stall every other session pays. Nothing is risked by letting it go: the own-first pick takes the
+        slot back when the wait is over, and if another session was allowed it meanwhile, that session's
+        claim rebinds and the owner's next pick is a spread - one slot either way, the pin's promise kept."""
+        hold = waiting_for_slot and self.slot_pin and session is not None
+        if hold:
+            self._pin_hold(session)
+        try:
+            self.slot_cv.wait(timeout=10.0)
+        finally:
+            if hold:
+                self._pin_release(session)
 
     def claim_slot(self, slot: int, session: str | None) -> None:
         """Bind `slot` to `session` (caller holds slot_cv), dropping whoever held it and the session's own previous

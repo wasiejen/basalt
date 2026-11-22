@@ -1192,19 +1192,54 @@ class SessionAffinity(PickSlot):
         self.assertEqual(self.pick(e, [7], session="s2"), 0)     # awake again, it is up for grabs
 
     def test_a_queued_session_keeps_its_idle_own_slot_too(self):
-        """The admission lane holds the IDLE own slot as well: a pinned session whose request queues keeps
-        another session off it - otherwise the conversation would sit parked there while the request resumed
-        somewhere else, one conversation in two slots - and the owner itself still takes it back."""
+        """A sleep that waits for a slot keeps the IDLE own slot too: the window in which it goes idle
+        mid-sleep stays the owner's - otherwise the conversation would sit parked there while the request
+        resumed somewhere else, one conversation in two slots - and the owner itself still takes it back.
+        For the sleep that already saw a pick, blocked at admission alone: the test below."""
         e = self.engine(3)
         e.slot_pin = True
         self.hold(e, [[], [], []])
         e.claim_slot(0, "s1")
-        e.slot_busy = [False, True, True]                       # s1's slot is idle and s1's request is queued
-        e._pin_hold("s1")                                       # what the admission lane does before it sleeps
+        e.slot_busy = [False, True, True]                       # s1's slot is idle and s1's request waits for it
+        e._pin_hold("s1")                                       # what a slot-blocked sleep does (see _pin_sleep)
         self.assertIsNone(self.pick(e, [7], session="s2"))      # the only free slot is the one it waits for
         self.assertEqual(self.pick(e, [7], session="s1"), 0)    # the owner itself still takes its own slot
         e._pin_release("s1")                                    # the queue moved on: nobody keeps it
         self.assertEqual(self.pick(e, [7], session="s2"), 0)    # now it is up for grabs
+
+    def test_an_admission_blocked_session_lets_its_idle_own_slot_go(self):
+        """Three sessions, two slots: s1 owns the idle slot 0 and sleeps in the admission lane while s3
+        waits in front of it and s2 decodes in slot 1; the sleep already sees a pick, so it does not hold -
+        s3 takes the idle own slot instead of the engine standing empty beside a full queue. A sleep that
+        waits FOR a slot holds its window still, and no sleep leaks its hold."""
+        e = self.engine(2)
+        e.slot_pin = True
+        self.hold(e, [[], []])
+        e.claim_slot(0, "s1")
+        e.slot_busy = [False, True]                             # s2 decodes in slot 1; s1's own slot is idle
+        seen = []
+
+        def mid_sleep(*a, **k):                                 # what another session's pick sees mid-sleep
+            seen.append(self.pick(e, [7], session="s3"))
+
+        with mock.patch.object(e.slot_cv, "wait", mid_sleep):
+            with e.slot_cv:
+                e._pin_sleep("s1", waiting_for_slot=False)      # the admission-blocked sleep: it saw its slot
+        self.assertEqual(seen, [0])                             # s3 takes the idle own slot: it is not held
+        self.assertEqual(e.pin_wait, {})                        # and the sleep registered no hold
+        self.assertEqual(self.pick(e, [7], session="s1"), 0)    # the owner's own pick still takes it back
+        e.slot_busy = [True, True]                              # s1's own slot busy: its next sleep waits FOR it
+
+        def mid_hold(*a, **k):                                  # s1's turn ends mid-sleep: the window is held
+            e.slot_busy[0] = False
+            seen.append(self.pick(e, [7], session="s3"))
+
+        with mock.patch.object(e.slot_cv, "wait", mid_hold):
+            with e.slot_cv:
+                e._pin_sleep("s1", waiting_for_slot=True)
+        self.assertIsNone(seen[-1])                             # s3 takes nothing across a held window
+        self.assertEqual(e.pin_wait, {})                        # ...and the hold ended with the sleep
+        self.assertEqual(self.pick(e, [7], session="s3"), 0)    # awake and unheld: up for grabs again
 
     def test_a_yield_reserve_pick_never_gives_a_pinned_session_a_second_slot(self):
         """The contract the solo/yield reserve (BYIELD) pick relies on, at the pick itself: a pinned session
