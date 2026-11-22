@@ -489,7 +489,6 @@ class ParallelService(unittest.TestCase):
         self.assertFalse(any(x.startswith("YIELD ") for x in log), log)   # gave way nowhere: no second slot
         self.assertEqual(list(self.engine.session_slot.values()), [0])    # s1 stayed in exactly its own slot
         self.assertFalse(any(self.engine.slot_busy))
-
     def test_an_admission_gives_way_too(self):
         """The same while another request decodes in a slot: the long one is being admitted, a short one waits."""
         self.start(3)
@@ -1205,6 +1204,23 @@ class SessionAffinity(PickSlot):
         self.assertEqual(self.pick(e, [7], session="s1"), 0)    # the owner itself still takes its own slot
         e._pin_release("s1")                                    # the queue moved on: nobody keeps it
         self.assertEqual(self.pick(e, [7], session="s2"), 0)    # now it is up for grabs
+
+    def test_a_yield_reserve_pick_never_gives_a_pinned_session_a_second_slot(self):
+        """The contract the solo/yield reserve (BYIELD) pick relies on, at the pick itself: a pinned session
+        owning a FREE slot reserves exactly that slot (the parked read stays in one slot), and a session
+        whose own slot is BUSY gets None - never a second one."""
+        e = self.engine(3)
+        e.slot_pin = True
+        self.hold(e, [[], [], []])
+        e.slot_busy = [False] * 3
+        self.assertEqual(self.pick(e, [7], session="s1"), 0)     # first pick owns slot 0 (claim below)
+        e.claim_slot(0, "s1")
+        self.assertEqual(self.pick(e, [7], session="s1"), 0)     # own idle: the yield reserve takes the OWN one
+        e.slot_busy[0] = True                                    # the own slot is a turn of its own now
+        self.assertIsNone(self.pick(e, [7], session="s1"))       # never a second slot for a pinned session
+        e.slot_pin = False                                       # without the pin it spreads, as ever
+        self.assertIn(self.pick(e, [7], session="s1"), (1, 2))
+
 
     def test_another_sessions_slot_is_taken_only_when_no_unowned_one_is_free(self):
         e = self.engine(3)
