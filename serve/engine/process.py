@@ -1591,12 +1591,14 @@ class ProcessEngine:
         return best if held_prefix(best) > 0 else min(pool, key=lambda b: (self.slot_held[b] > 0, self.slot_used[b]))
 
     def _pin_hold(self, session: str | None) -> None:
-        """Keeps a sleeping request's own slot out of other sessions' picks (caller holds slot_cv, and only
-        while the pin is on): held only by a request blocked on a BUSY slot, since one whose slot is free
-        waits on the queue instead and would be keeping a slot nobody can reach."""
+        """Keeps a waiting request's own slot out of other sessions' picks (caller holds slot_cv, and only
+        while the pin is on): held while its own slot is BUSY with a turn of its own, and while it is IDLE
+        with the request still queued at admission - in that window an other session's pick would take the
+        idle own slot, and the same conversation would end up parked in it while resuming in another. The
+        owner's own pick is unaffected: pick_slot returns an owner its own slot before the holds filter."""
         if self.slot_pin and session is not None:
             own = self.session_slot.get(session)
-            if own is not None and 0 <= own < len(self.slot_busy) and self.slot_busy[own]:
+            if own is not None and 0 <= own < len(self.slot_busy):
                 self.pin_wait[session] = self.pin_wait.get(session, 0) + 1
 
     def _pin_release(self, session: str | None) -> None:

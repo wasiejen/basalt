@@ -1170,6 +1170,21 @@ class SessionAffinity(PickSlot):
         e._pin_release("s1")                                    # but a sleeper never keeps a slot idle
         self.assertEqual(self.pick(e, [7], session="s2"), 0)     # awake again, it is up for grabs
 
+    def test_a_queued_session_keeps_its_idle_own_slot_too(self):
+        """The admission lane holds the IDLE own slot as well: a pinned session whose request queues keeps
+        another session off it - otherwise the conversation would sit parked there while the request resumed
+        somewhere else, one conversation in two slots - and the owner itself still takes it back."""
+        e = self.engine(3)
+        e.slot_pin = True
+        self.hold(e, [[], [], []])
+        e.claim_slot(0, "s1")
+        e.slot_busy = [False, True, True]                       # s1's slot is idle and s1's request is queued
+        e._pin_hold("s1")                                       # what the admission lane does before it sleeps
+        self.assertIsNone(self.pick(e, [7], session="s2"))      # the only free slot is the one it waits for
+        self.assertEqual(self.pick(e, [7], session="s1"), 0)    # the owner itself still takes its own slot
+        e._pin_release("s1")                                    # the queue moved on: nobody keeps it
+        self.assertEqual(self.pick(e, [7], session="s2"), 0)    # now it is up for grabs
+
     def test_another_sessions_slot_is_taken_only_when_no_unowned_one_is_free(self):
         e = self.engine(3)
         self.hold(e, [[], [], []])
