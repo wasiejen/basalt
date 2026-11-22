@@ -283,6 +283,7 @@ class PickSlot(unittest.TestCase):
         e.slot_epoch = [0] * n
         e.slot_owner = {}
         e.session_slot = {}
+        e.pin_wait = {}
         e.slot_thread = [None] * n
         return e
 
@@ -988,6 +989,30 @@ class ParallelService(unittest.TestCase):
                        lambda: self.chat_session("beta " * 14, {"x-session-id": "root", "x-opencode-session-id": "kin"})])
         self.assertEqual(set(self.engine.session_slot), {"kid", "kin"})
 
+    def test_a_pinned_session_runs_its_requests_in_its_own_slot(self):
+        """conversation-cache-slot-pin: two overlapping requests of one session both run in the slot it owns,
+        one after the other, instead of parking a second copy of the conversation somewhere else."""
+        self.start(3, pin=True)
+        out = self.together([lambda: self.chat_session("alpha " * 10, {"x-session-id": "s1"}),
+                             lambda: self.chat_session("beta " * 14, {"x-session-id": "s1"})])
+        self.assertEqual(len(out), 2)                                # neither is lost: the second waits, then goes
+        self.assertEqual([r["choices"][0]["message"]["content"] for r in out],
+                         ["ok, done.", "ok, done."])
+        slots = [int(x.split()[1]) for x in self.log.read_text().splitlines() if x.startswith(("BGEN", "SGEN"))]
+        self.assertEqual(len(set(slots)), 1, slots)                   # one slot for both of its requests
+        self.assertEqual(list(self.engine.session_slot), ["s1"])      # the binding survived the wait
+        self.assertEqual(self.engine.slot_owner, {self.engine.session_slot["s1"]: "s1"})
+        self.assertFalse(any(self.engine.slot_busy))                  # nothing is left held
+
+    def test_without_the_pin_overlapping_requests_of_one_session_take_two_slots(self):
+        """The negative control: with no pin a session whose own slot is busy takes another and owns that."""
+        self.start(3)
+        self.together([lambda: self.chat_session("alpha " * 10, {"x-session-id": "s1"}),
+                       lambda: self.chat_session("beta " * 14, {"x-session-id": "s1"})])
+        slots = [int(x.split()[1]) for x in self.log.read_text().splitlines() if x.startswith(("BGEN", "SGEN"))]
+        self.assertEqual(len(set(slots)), 2, slots)
+        self.assertEqual(len(self.engine.session_slot), 1)            # one binding, the later claim owns it
+
     def test_a_listed_default_header_moves_ahead_of_the_default_first(self):
         """A header of the server's own order named by the knob is read before the rest of that order."""
         self.start(3, identity="x-session-id")
@@ -1085,6 +1110,10 @@ class ParallelService(unittest.TestCase):
 class SessionAffinity(PickSlot):
     """A session header keeps a conversation in its own slot, so the next turn continues the K/V already there."""
 
+    def test_the_pin_defaults_off_and_the_engine_switch_turns_it_on(self):
+        self.assertFalse(ProcessEngine("missing-executable", [], lazy=True).slot_pin)
+        self.assertTrue(ProcessEngine("missing-executable", ["--conversation-cache-slot-pin"], lazy=True).slot_pin)
+
     def test_a_repeated_session_takes_its_own_slot(self):
         e = self.engine(3)
         self.hold(e, [[1, 2, 3, 4], [9, 9], [1, 2]])
@@ -1108,6 +1137,36 @@ class SessionAffinity(PickSlot):
         self.assertEqual(slot_header_order(),
                          ("x-llm-flow-id", "x-claude-code-session-id", "x-session-id", "x-session-affinity",
                           "x-grok-conv-id", "x-grok-session-id"))        # unset: the order today
+
+    def test_a_pinned_session_waits_for_its_own_slot(self):
+        """The pin never spreads a session: while its slot is busy its request waits for the K/V sitting there."""
+        e = self.engine(3)
+        e.slot_pin = True
+        self.hold(e, [[], [], []])
+        e.claim_slot(0, "s1")
+        e.slot_busy = [True, False, False]
+        self.assertIsNone(self.pick(e, [7], session="s1"))     # two free slots, and it takes neither
+        e.slot_busy = [False] * 3
+        self.assertEqual(self.pick(e, [7], session="s1"), 0)   # free again: the slot its K/V sits in
+        e.slot_pin = False                              # without the pin it spreads, as today
+        e.slot_busy = [True, False, False]
+        self.assertIn(self.pick(e, [7], session="s1"), (1, 2))
+
+    def test_a_waiting_session_keeps_the_slot_it_waits_for(self):
+        """A request asleep on its own slot keeps it: the slot is its next turn's conversation, not spare room."""
+        e = self.engine(3)
+        e.slot_pin = True
+        self.hold(e, [[], [], []])
+        e.claim_slot(0, "s1")
+        e.slot_busy = [True, True, False]
+        self.assertIsNone(self.pick(e, [7], session="s1"))
+        e._pin_hold("s1")                                       # what the admission lane does as s1 sleeps
+        e.slot_busy = [False, True, False]                      # s1's slot frees while s1 sleeps
+        self.assertEqual(self.pick(e, [7], session="s2"), 2)     # another session takes a free one, not s1's
+        e.slot_busy = [False, True, True]
+        self.assertIsNone(self.pick(e, [7], session="s2"))      # only s1's slot is free: it waits too
+        e._pin_release("s1")                                    # but a sleeper never keeps a slot idle
+        self.assertEqual(self.pick(e, [7], session="s2"), 0)     # awake again, it is up for grabs
 
     def test_another_sessions_slot_is_taken_only_when_no_unowned_one_is_free(self):
         e = self.engine(3)

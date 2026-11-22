@@ -269,8 +269,10 @@ class ProcessEngine:
                  env: dict | None = None, lazy: bool = False, slot_identity: tuple[str, ...] = ()):
         self.spawn = (engine_bin, list(args), cwd, log, env)   # to start it again
         self.model_path = flag_value(args, "--model") or ""
-        # the headers the server keys this engine's sessions by (conversation-cache-slot-identity): never an
-        # engine word, the engine carries them so the server reads the setting its engine was given
+        # the two slot knobs, both read off the words this engine was given: the pin keeps a session to the slot
+        # it owns (the engine's own switch, forwarded only when set), and the identity names say which headers the
+        # server keyed that session by (its own setting, never an engine word)
+        self.slot_pin = flag_index(args, "--conversation-cache-slot-pin") is not None
         if "slot_identity" not in self.__dict__:     # a restart re-runs this with the same words, not with the
             self.slot_identity = tuple(slot_identity or ())        # server's settings: keep what it first got
         self.quit_s = QUIT_DISK_S if (flag_value(args, "--conversation-cache-disk-mib") or "0") != "0" else QUIT_S
@@ -411,6 +413,9 @@ class ProcessEngine:
         # turn continues the K/V that is already there instead of being admitted wherever and copied in
         self.slot_owner: dict[int, str] = {}
         self.session_slot: dict[str, int] = {}
+        # requests asleep in the admission lane blocked on the slot their session owns: while one sleeps, no
+        # other session is picked into that slot, so the sleeper wakes to the conversation it left there
+        self.pin_wait: dict[str, int] = {}
         # the request thread that last took each slot: the slot table shows a running request on its own slot
         self.slot_thread: list[int | None] = [None] * self.batch
         # admission state outlives engine processes: restart() re-runs this while requests wait on it
@@ -1299,7 +1304,9 @@ class ProcessEngine:
                                         self.ctl.release()
                                         holding = False
                                         self.slot_cv.notify_all()
+                                    self._pin_hold(session)       # the slot it sleeps on is nobody else's
                                     self.slot_cv.wait(timeout=10.0)
+                                    self._pin_release(session)
                                     if cancel.is_set():
                                         return
                             finally:
@@ -1554,19 +1561,48 @@ class ProcessEngine:
         where its K/V sits), then the longest held prefix, else an empty one, then the least recently used; None
         when none is free.  A slot owned by another session is taken only when no unowned one is free: the owner
         lost its conversation either way, and the least recently used goes first.  Read-only: `claim_slot` records
-        the choice."""
+        the choice.  The pin reads both rules strictly: a session that owns a slot never gets a second one but
+        waits for its own in the caller's lane, and a slot stays with a session asleep on it, so the request
+        that woke up for it is not left standing somewhere else."""
         free = [b for b in self.slot_order if not self.slot_busy[b]]
         if not free:
             return None
         own = self.session_slot.get(session) if session is not None else None
-        if own is not None and own in free:
-            return own
+        if own is not None:
+            if own in free:
+                return own
+            if self.slot_pin and own in self.slot_order:
+                return None                       # its own slot is busy: wait for the K/V there, no second copy
+        if self.slot_pin:
+            waits = {self.session_slot[s] for s in self.pin_wait if s in self.session_slot}
+            free = [b for b in free if b not in waits]
+            if not free:
+                return None                       # every free slot is one its owner is on its way back to
 
         def held_prefix(b):
             return meet[b] if 0 < meet[b] < size else 0
         pool = [b for b in free if b not in self.slot_owner] or free   # slot_owner is keyed by slot
         best = max(pool, key=held_prefix)
         return best if held_prefix(best) > 0 else min(pool, key=lambda b: (self.slot_held[b] > 0, self.slot_used[b]))
+
+    def _pin_hold(self, session: str | None) -> None:
+        """Keeps a sleeping request's own slot out of other sessions' picks (caller holds slot_cv, and only
+        while the pin is on): held only by a request blocked on a BUSY slot, since one whose slot is free
+        waits on the queue instead and would be keeping a slot nobody can reach."""
+        if self.slot_pin and session is not None:
+            own = self.session_slot.get(session)
+            if own is not None and 0 <= own < len(self.slot_busy) and self.slot_busy[own]:
+                self.pin_wait[session] = self.pin_wait.get(session, 0) + 1
+
+    def _pin_release(self, session: str | None) -> None:
+        """Ends that hold on the way back to the pick, counted, so that several requests of one session end
+        their waits one by one and none of them keeps a slot it could have taken itself."""
+        if self.slot_pin and session is not None and session in self.pin_wait:
+            n = self.pin_wait[session] - 1
+            if n > 0:
+                self.pin_wait[session] = n
+            else:
+                del self.pin_wait[session]
 
     def claim_slot(self, slot: int, session: str | None) -> None:
         """Bind `slot` to `session` (caller holds slot_cv), dropping whoever held it and the session's own previous

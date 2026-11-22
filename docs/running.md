@@ -30,7 +30,17 @@ subagents, so their overlapping requests spread over slots.
 `conversation-cache-slot-identity` (a setting of the `engine` section) says which headers to read ahead of that list,
 in the order it names them: a header of the list above moves to its front, one the server does not know is read before
 all of them, and none of them stops being read, so the setting orders the read instead of filtering it. Unset, the
-order above is what the server reads.
+order above is what the server reads. `conversation-cache-slot-pin` (default off) keeps a session to the slot it owns:
+when that slot is busy its request waits there instead of taking another one, so a session never comes to hold one
+conversation in two slots.
+
+A client that stamps each of its sessions with a header of its own, beside a shared one it gives a session and its
+subagents, is set best as a pair; OpenCode stamps `x-opencode-session-id` per session and `x-session-id` for a whole
+tree of them:
+
+```
+"engine": {"conversation-cache-slot-identity": "x-opencode-session-id", "conversation-cache-slot-pin": true}
+```
 
 ### Prompts beside decoding slots
 
