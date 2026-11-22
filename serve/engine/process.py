@@ -1617,9 +1617,11 @@ class ProcessEngine:
         session's own slot out of other sessions' picks only while the sleep waits FOR A SLOT. A sleep that
         already saw a slot waits for the admission lane alone: the queue in front of it can run for a whole
         turn, and an own IDLE slot held through that stands empty with nobody able to use it - a bounded
-        stall every other session pays. Nothing is risked by letting it go: the own-first pick takes the
-        slot back when the wait is over, and if another session was allowed it meanwhile, that session's
-        claim rebinds and the owner's next pick is a spread - one slot either way, the pin's promise kept."""
+        stall every other session pays. What letting it go costs, and to whom: only a session that owns no
+        slot can be handed the idle own slot by pick_slot (every bound session gets its own slot or nothing),
+        and when that happens the thief's claim moves the binding, the owner's parked K/V there is lost and
+        rebuilds the way a shed one rebuilds, and its next pick spreads. A slot nobody took the owner's
+        own-first pick simply takes back - one conversation in one slot either way, the pin's promise kept."""
         hold = waiting_for_slot and self.slot_pin and session is not None
         if hold:
             self._pin_hold(session)
