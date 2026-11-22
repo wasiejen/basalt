@@ -469,6 +469,27 @@ class ParallelService(unittest.TestCase):
             self.assertEqual(len(self.svc.history), 2)
         self.assertFalse(any(self.engine.slot_busy))
 
+    def test_a_pinned_solo_read_takes_no_yield_slot_and_no_second_slot(self):
+        """The pin combined with the solo/yield path: a second request of the session running solo waits in
+        the queue for its own slot instead of spreading, the solo read's reserve gives it no yield slot, and
+        the session continues in its own slot - one conversation, one slot, no YIELD."""
+        self.start(2, reuse=True, slot_cache=True, slot0_solo=True, solo_any=True, pin=True, ready=200000)
+        long_q = "long " * 600
+        res = {}
+        def go_long():
+            res["long"] = self.chat_session(long_q, {"x-session-id": "s1"})
+        a = threading.Thread(target=go_long)
+        a.start()
+        time.sleep(0.3)                                 # the solo read runs in s1's own slot
+        res["tail"] = self.chat_session("short tail", {"x-session-id": "s1"})   # waits for it
+        a.join(30)
+        self.assertEqual(res["long"]["choices"][0]["message"]["content"], "ok, done.")
+        self.assertEqual(res["tail"]["choices"][0]["message"]["content"], "ok, done.")
+        log = self.log.read_text().splitlines()
+        self.assertFalse(any(x.startswith("YIELD ") for x in log), log)   # gave way nowhere: no second slot
+        self.assertEqual(list(self.engine.session_slot.values()), [0])    # s1 stayed in exactly its own slot
+        self.assertFalse(any(self.engine.slot_busy))
+
     def test_an_admission_gives_way_too(self):
         """The same while another request decodes in a slot: the long one is being admitted, a short one waits."""
         self.start(3)

@@ -1255,7 +1255,12 @@ class ProcessEngine:
                                     self._shorter_waiting(size(), 2 if solo_slot is None else 1)):
                                 if solo_slot is None:
                                     with self.slot_cv:      # slot the partial read will wait in
-                                        reserved = self.pick_slot(meets(), size(), session)
+                                        # the pin at the site: a session that owns a slot takes no second one as
+                                        # its yield slot either - reserved stays None and the run finishes where
+                                        # it owns, giving way nobody (pick_slot would answer the same for the
+                                        # busy own slot; the rule belongs where BYIELD would be sent)
+                                        if not (self.slot_pin and self.session_slot.get(session) is not None):
+                                            reserved = self.pick_slot(meets(), size(), session)
                                         if reserved is not None:
                                             self.slot_busy[reserved] = True
                                             self.claim_slot(reserved, session)
