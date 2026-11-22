@@ -346,6 +346,33 @@ int main() {
                   cache.best(a, {}, true).tokens == 0,
               "pin off: the byte pressure evicts the oldest BUDGETED one and passes around the idle entry");
     }
+    {   // pin on: an idle park counts the retained K/V too, and drops it as make_room's first relief
+        const size_t one = image({1, 2, 3}).bytes();
+        auto kv = [](size_t n) { std::vector<ConversationKv> v(1); v[0].k.resize(n, 1); return v; };
+        ConversationCache cache(one * 6, 8);   // fits parked+retained, not parked+retained+another park
+        cache.set_slot_pin(true);
+        cache.put(image({1, 2, 3}));
+        cache.retain(kv(one), one);   // optional buffers near the cap: an idle park must count them
+        check(cache.retained_bytes() > 0 && cache.bytes() < one * 6, "pin on: retained buffers fit under the cap");
+        cache.put_slot(image({9, 8, 7}), 4);
+        check(cache.retained_bytes() == 0 && cache.slot_size() == 1 && cache.size() == 2 &&
+                  cache.bytes() <= one * 6,
+              "pin on: an idle park counts the retained buffers and drops them as its first relief");
+    }
+    {   // pin on: an idle image over the whole budget is refused like put()'s - nothing leaves to make room for it
+        const size_t one = image({1, 2, 3}).bytes();
+        ConversationCache cache(one * 3, 8);
+        cache.set_slot_pin(true);
+        cache.put(image({1, 2, 3}));
+        const size_t before = cache.evictions();
+        auto huge = image({5, 6, 7});
+        huge.live.state_a.resize(one * 3);        // over the whole budget on its own
+        cache.put_slot(std::move(huge), 1);
+        check(cache.size() == 1 && cache.slot_size() == 0 && cache.evictions() == before &&
+                  cache.best(a, {}, true).tokens == 3 &&
+                  cache.best(std::vector<int64_t>{5, 6, 7, 8}, {}, true).tokens == 0,
+              "pin on: the oversized idle park is refused and the cache stays put");
+    }
     {
         // layer-split parking: checkpoints moved apart into stage parts and put back, no running state copied
         auto running = [](std::initializer_list<int32_t> ids, uint8_t salt, size_t parts) {

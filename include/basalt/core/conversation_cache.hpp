@@ -421,12 +421,16 @@ public:
     /// An idle batch slot's conversation, out of VRAM: kept whatever the byte budget (the caller has admitted its
     /// RAM), at most `keep` of them; the longest parked leaves first (to the tier below when spilling).
     /// With slot-pin on (and a budgeted cache) the caller's `keep` is superseded by the two real caps: the park
-    /// takes the longest parked conversations of either kind with it until the count and the bytes fit again.
+    /// takes the longest parked conversations of either kind with it until the count and the bytes fit again -
+    /// the retained K/V counts against the bytes like make_room counts it, and goes first as its first relief.
+    /// An image over the whole budget is refused the way put() refuses one: the cache stays as it was.
     void put_slot(SavedConversation&& image, size_t keep) {
+        if (slot_pin_ && enabled() && image.bytes() > budget_) return;   // put()'s refusal, mirrored: nothing evicts to fit
         drop_superseded(image.live.ids, image.live.imgs, image.checkpoints, image.cvec);
         if (slot_pin_ && enabled()) {
             const size_t n = image.bytes();
-            while (!entries_.empty() && (entries_.size() >= slots_ || bytes_ + n > budget_))
+            if (budgeted_bytes() > budget_ - n) reuse_ = {};
+            while (!entries_.empty() && (entries_.size() >= slots_ || bytes_ + reuse_.bytes() + n > budget_))
                 if (!evict_oldest(true)) break;
         } else while (slot_count_ > 0 && slot_count_ >= keep && evict_oldest(true)) {}
         image.from_slot = true;
