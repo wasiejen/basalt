@@ -430,8 +430,10 @@ public:
         drop_superseded(image.live.ids, image.live.imgs, image.checkpoints, image.cvec);
         if (slot_pin_ && enabled()) {
             const size_t n = image.bytes();
-            if (budgeted_bytes() > budget_ - n) reuse_ = {};
-            while (!entries_.empty() && (entries_.size() >= slots_ || bytes_ + reuse_.bytes() + n > budget_))
+            if (budgeted_bytes() > budget_ - n) reuse_ = {};   // the retained K/V's one relief, decided before the loop
+            // the loop itself charges bytes_ alone: above, the K/V left exactly when it did not fit, and while it
+            // stayed the park already fit; evicting only shrinks bytes_, so nothing inside can re-open that door.
+            while (!entries_.empty() && (entries_.size() >= slots_ || bytes_ + n > budget_))
                 if (!evict_oldest(true)) break;
         } else while (slot_count_ > 0 && slot_count_ >= keep && evict_oldest(true)) {}
         image.from_slot = true;

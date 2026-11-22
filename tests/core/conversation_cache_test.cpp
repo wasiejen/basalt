@@ -375,6 +375,43 @@ int main() {
         check(cache.put_slot(image({9, 8, 7}), 1) && cache.slot_size() == 1,
               "pin on: an idle park that fits answers true");
     }
+    {   // pin on: with the retained K/V in place and the count cap biting, the eviction loop stays a count
+        // matter alone: the bytes fit, so no K/V is dropped to make room the count did not ask for
+        const size_t one = image({1, 2, 3}).bytes();
+        auto kv = [](size_t n) { std::vector<ConversationKv> v(1); v[0].k.resize(n, 1); return v; };
+        ConversationCache cache(one * 16, 2);   // the count cap bites first; the bytes always fit
+        cache.set_slot_pin(true);
+        cache.put(image({1, 2, 3}));
+        cache.retain(kv(8), 8);
+        check(cache.retained_bytes() > 0, "pin on: the retained K/V fits beside the parked entry");
+        cache.put_slot(image({9, 8, 7}), 4);
+        check(cache.size() == 2 && cache.evictions() == 0 && cache.retained_bytes() > 0,
+              "pin on: an idle park that fits keeps the retained K/V");
+        cache.put_slot(image({5, 6, 7}), 4);    // the count cap: the oldest leaves, of either kind
+        check(cache.size() == 2 && cache.slot_size() == 2 && cache.evictions() == 1 &&
+                  cache.retained_bytes() > 0 && cache.best(a, {}, true).tokens == 0,
+              "pin on: the count cap evicts alone while the bytes fit - the retained K/V stays");
+    }
+    {   // pin on: when the park forced the retained K/V out above the loop, the loop's byte charge is the
+        // parked bytes plus the incoming image alone - it evicts the oldest until they fit, exactly as many
+        // as that takes, and never opens the dropped K/V's door again
+        const size_t one = image({1, 2, 3}).bytes();
+        auto kv = [](size_t n) { std::vector<ConversationKv> v(1); v[0].k.resize(n, 1); return v; };
+        ConversationCache cache(one * 8, 8);    // the byte cap bites here, the count cap never
+        cache.set_slot_pin(true);
+        cache.put(image({1, 2, 3}));
+        cache.put(image({9, 8, 7}));
+        cache.retain(kv(one), one);
+        check(cache.retained_bytes() > 0 && cache.bytes() <= one * 8,
+              "pin on: parked and retained together still fit");
+        auto park = image({4, 4, 4});
+        park.live.state_a.resize(480);          // 492 in all: over the cap with both parked, under it with one evicted
+        cache.put_slot(std::move(park), 4);
+        check(cache.retained_bytes() == 0 && cache.size() == 2 && cache.slot_size() == 1 &&
+                  cache.evictions() == 1 && cache.best(a, {}, true).tokens == 0 &&
+                  cache.best(b, {}, true).tokens == 3 && cache.bytes() <= one * 8,
+              "pin on: the byte charge evicted exactly the oldest - the K/V was dropped once, above the loop");
+    }
     {   // toggled off on a live cache holding charged bytes: the f63e3e21 split returns, no rebuild needed
         const size_t one = image({1, 2, 3}).bytes();
         ConversationCache cache(one * 3, 8);
