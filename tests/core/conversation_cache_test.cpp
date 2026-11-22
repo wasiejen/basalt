@@ -290,6 +290,62 @@ int main() {
         cache.put_slot(std::move(turn), 4);
         check(cache.superseded() == 1 && cache.slot_size() == 2, "a later turn of the same conversation supersedes its copy");
     }
+    {   // slot-pin on: the idle slots' conversations count against the byte budget too, and a byte-pressure
+        // park evicts the longest parked conversation ACROSS the kinds
+        const size_t one = image({1, 2, 3}).bytes();
+        ConversationCache cache(one * 3, 8);   // the byte cap holds three; the count cap never bites here
+        cache.set_slot_pin(true);
+        cache.put_slot(image({9, 8, 7}), 4);   // parked longest: first out
+        cache.put(image({1, 2, 3}));
+        cache.put(image({5, 6, 7}));
+        check(cache.size() == 3 && cache.slot_size() == 1 && cache.bytes() == one * 3,
+              "pin on: the idle slot's conversation sits inside the byte budget beside the budgeted parks");
+        check(cache.put(image({7, 7, 7})), "pin on: a byte-pressure park evicts across the kinds");
+        check(cache.size() == 3 && cache.slot_size() == 0 && cache.slot_bytes() == 0 && cache.bytes() == one * 3 &&
+                  cache.evictions() == 1,
+              "pin on: the evicted one was the idle entry, its counters given back");
+        check(cache.best(b, {}, true).tokens == 0 && cache.best(a, {}, true).tokens == 3 &&
+                  cache.best(std::vector<int64_t>{5, 6, 7, 8}, {}, true).tokens == 3,
+              "pin on: oldest first across kinds - the longest parked left, the budgeted ones stayed");
+    }
+    {   // slot-pin on: the count cap counts both kinds
+        const size_t one = image({1, 2, 3}).bytes();
+        ConversationCache cache(one * 8, 2);   // the count cap bites first
+        cache.set_slot_pin(true);
+        cache.put_slot(image({9, 8, 7}), 4);   // an idle entry takes one of the two counted places
+        check(cache.put(image({1, 2, 3})), "pin on: the second place holds an idle and a budgeted entry");
+        check(cache.size() == 2 && cache.slot_size() == 1, "pin on: the idle entry counts against the cap");
+        check(cache.put(image({5, 6, 7})), "pin on: the count cap evicts the oldest of either kind");
+        check(cache.size() == 2 && cache.slot_size() == 0 && cache.best(b, {}, true).tokens == 0 &&
+                  cache.best(a, {}, true).tokens == 3,
+              "pin on: the idle entry left first for a budgeted one");
+    }
+    {   // slot-pin on: put_slot's per-caller count is superseded by the two real caps
+        const size_t one = image({1, 2, 3}).bytes();
+        ConversationCache cache(one * 3, 8);
+        cache.set_slot_pin(true);
+        cache.put(image({1, 2, 3}));
+        cache.put_slot(image({9, 8, 7}), 1);   // keep=1: the old cap would already evict the first idle entry
+        cache.put_slot(image({5, 6, 7}), 1);
+        check(cache.size() == 3 && cache.slot_size() == 2 && cache.bytes() == one * 3 && cache.evictions() == 0,
+              "pin on: `keep` no longer evicts while both caps hold");
+        cache.put_slot(image({4, 4, 4}), 1);   // over the byte cap: the longest parked leaves, a budgeted one
+        check(cache.size() == 3 && cache.slot_size() == 3 && cache.bytes() == one * 3 && cache.evictions() == 1 &&
+                  cache.best(a, {}, true).tokens == 0 && cache.best(b, {}, true).tokens == 3,
+              "pin on: the byte cap evicts the oldest parked of either kind, not by the caller's count");
+    }
+    {   // pin off, set by name: the f63e3e21 split stays reachable - byte pressure leaves the idle kind alone
+        const size_t one = image({1, 2, 3}).bytes();
+        ConversationCache cache(one * 2, 8);
+        cache.set_slot_pin(false);
+        cache.put_slot(image({9, 8, 7}), 4);
+        check(cache.put(image({1, 2, 3})) && cache.put(image({5, 6, 7})),
+              "pin off: the budgeted parks fit beside the budget-exempt idle entry");
+        check(cache.put(image({7, 7, 7})) && cache.size() == 3 && cache.slot_size() == 1 &&
+                  cache.bytes() == one * 3 && cache.best(b, {}, true).tokens == 3 &&
+                  cache.best(a, {}, true).tokens == 0,
+              "pin off: the byte pressure evicts the oldest BUDGETED one and passes around the idle entry");
+    }
     {
         // layer-split parking: checkpoints moved apart into stage parts and put back, no running state copied
         auto running = [](std::initializer_list<int32_t> ids, uint8_t salt, size_t parts) {
