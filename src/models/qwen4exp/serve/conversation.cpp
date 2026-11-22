@@ -507,6 +507,7 @@ int QfnRuntime::init_conversations() {
     conversations.emplace(
         o.prompt_cache > 0 ? (size_t) o.conversation_cache_mib * 1024 * 1024 : 0,
         (size_t) o.conversation_cache_slots);
+    conversations->set_slot_pin(o.conversation_cache_slot_pin);
 
     disk_floor = 0;                              // the RAM a capture or a read leaves free (set below)
 

@@ -32,7 +32,10 @@ in the order it names them: a header of the list above moves to its front, one t
 all of them, and none of them stops being read, so the setting orders the read instead of filtering it. Unset, the
 order above is what the server reads. `conversation-cache-slot-pin` (default off) keeps a session to the slot it owns:
 when that slot is busy its request waits there instead of taking another one, so a session never comes to hold one
-conversation in two slots.
+conversation in two slots. In the engine's RAM cache the flag does one more thing: on, a parked idle-slot
+conversation counts against both `conversation-cache-slots` and `conversation-cache-mib` like any other parked
+conversation, and the eviction takes the longest parked one of either kind; off, the idle lane keeps its own count
+cap outside the byte budget.
 
 A client that stamps each of its sessions with a header of its own, beside a shared one it gives a session and its
 subagents, is set best as a pair; OpenCode stamps `x-opencode-session-id` per session and `x-session-id` for a whole
