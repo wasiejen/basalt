@@ -489,6 +489,7 @@ class ParallelService(unittest.TestCase):
         self.assertFalse(any(x.startswith("YIELD ") for x in log), log)   # gave way nowhere: no second slot
         self.assertEqual(list(self.engine.session_slot.values()), [0])    # s1 stayed in exactly its own slot
         self.assertFalse(any(self.engine.slot_busy))
+
     def test_an_admission_gives_way_too(self):
         """The same while another request decodes in a slot: the long one is being admitted, a short one waits."""
         self.start(3)
@@ -1220,7 +1221,6 @@ class SessionAffinity(PickSlot):
         self.assertIsNone(self.pick(e, [7], session="s1"))       # never a second slot for a pinned session
         e.slot_pin = False                                       # without the pin it spreads, as ever
         self.assertIn(self.pick(e, [7], session="s1"), (1, 2))
-
 
     def test_another_sessions_slot_is_taken_only_when_no_unowned_one_is_free(self):
         e = self.engine(3)
