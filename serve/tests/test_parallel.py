@@ -490,6 +490,40 @@ class ParallelService(unittest.TestCase):
         self.assertEqual(list(self.engine.session_slot.values()), [0])    # s1 stayed in exactly its own slot
         self.assertFalse(any(self.engine.slot_busy))
 
+    def test_the_admission_lane_hands_the_sleep_the_pick_that_it_saw(self):
+        """The production lane, not the unit: pick_slot and _pin_sleep are watched on the running engine, so
+        every sleep the lane takes must carry exactly the answer of the pick that preceded it in its own
+        request - a queued request behind two decoding slots sleeps as waiting_for_slot=True, and no sleep
+        ever lies about its pick (an inverted flag at the call site goes RED here)."""
+        self.start(2, pin=True)
+        e = self.engine
+        real_pick, real_sleep = e.pick_slot, e._pin_sleep
+        last, pairs = {}, []
+        def pick(meet, size, session=None):
+            got = real_pick(meet, size, session)
+            last[threading.get_ident()] = got
+            return got
+        def sleep(session, waiting_for_slot):
+            pairs.append((last.get(threading.get_ident()), waiting_for_slot))
+            real_sleep(session, waiting_for_slot)
+        with mock.patch.object(e, "pick_slot", pick), mock.patch.object(e, "_pin_sleep", sleep):
+            bg = []
+            for i in (0, 1):
+                th = threading.Thread(target=lambda i=i: self.chat(f"background {i}", max_tokens=80))
+                th.start(); bg.append(th)
+            deadline = time.time() + 10.0
+            while not all(e.slot_busy) and time.time() < deadline:      # both slots decode before the third comes
+                time.sleep(0.02)
+            self.assertTrue(all(e.slot_busy))
+            self.chat("third one", max_tokens=8)                        # queued: its lane sleep waits FOR a slot
+            for th in bg:
+                th.join(30)
+        self.assertTrue(pairs, "the lane never slept: this pin would be vacuous")
+        for seen, held in pairs:
+            self.assertEqual(held, seen is None)                        # the flag IS the pick, never inverted
+        self.assertTrue(any(h for _, h in pairs))                       # the busy-slots request slept as True
+        self.assertFalse(any(self.engine.slot_busy))
+
     def test_an_admission_gives_way_too(self):
         """The same while another request decodes in a slot: the long one is being admitted, a short one waits."""
         self.start(3)
@@ -1191,17 +1225,17 @@ class SessionAffinity(PickSlot):
         e._pin_release("s1")                                    # but a sleeper never keeps a slot idle
         self.assertEqual(self.pick(e, [7], session="s2"), 0)     # awake again, it is up for grabs
 
-    def test_a_queued_session_keeps_its_idle_own_slot_too(self):
-        """A sleep that waits for a slot keeps the IDLE own slot too: the window in which it goes idle
-        mid-sleep stays the owner's - otherwise the conversation would sit parked there while the request
-        resumed somewhere else, one conversation in two slots - and the owner itself still takes it back.
-        For the sleep that already saw a pick, blocked at admission alone: the test below."""
+    def test_the_hold_covers_the_idle_own_slot_too(self):
+        """The _pin_hold PRIMITIVE driven directly: held even on an IDLE own slot, another session's pick
+        passes it by and the owner itself still takes it back. The lane itself never starts a hold on an
+        idle own slot - pick_slot returns that to its owner, so a lane HOLD always starts on a BUSY own
+        slot; the lane's own rule is what the admission-lane tests below pin."""
         e = self.engine(3)
         e.slot_pin = True
         self.hold(e, [[], [], []])
         e.claim_slot(0, "s1")
-        e.slot_busy = [False, True, True]                       # s1's slot is idle and s1's request waits for it
-        e._pin_hold("s1")                                       # what a slot-blocked sleep does (see _pin_sleep)
+        e.slot_busy = [False, True, True]                       # s1's own slot idle: the primitive, not the lane
+        e._pin_hold("s1")                                       # the hold itself, applied to the idle own slot
         self.assertIsNone(self.pick(e, [7], session="s2"))      # the only free slot is the one it waits for
         self.assertEqual(self.pick(e, [7], session="s1"), 0)    # the owner itself still takes its own slot
         e._pin_release("s1")                                    # the queue moved on: nobody keeps it
