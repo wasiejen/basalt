@@ -1275,6 +1275,35 @@ class SessionAffinity(PickSlot):
         self.assertNotIn("s2", e.session_slot)
         self.assertEqual(e.slot_owner, {0: "s1", 1: "s3"})
 
+    def test_two_pinned_sessions_keep_distinct_slots_and_pressure_displaces_the_oldest(self):
+        """The maintainer's field shape - pinned parallel 2, three sessions: across each other's turns s1
+        and s2 keep taking their own distinct slots, and when a third session arrives while both are in
+        use it takes - and its claim displaces - the OLDEST-used owned slot; the newer binding stands."""
+        e = self.engine(2)
+        e.slot_pin = True
+        self.hold(e, [[], []])
+        e.slot_busy = [False, False]
+        self.assertEqual(self.pick(e, [7], session="s1"), 0)    # first arrivals' spread claims slot 0
+        e.claim_slot(0, "s1")
+        self.assertEqual(self.pick(e, [7], session="s2"), 1)    # s2 spreads to the unowned slot 1
+        e.claim_slot(1, "s2")
+        for _ in range(3):                                      # across each other's turns
+            e.slot_busy = [False, False]
+            self.assertEqual(self.pick(e, [7], session="s1"), 0)
+            self.assertEqual(self.pick(e, [7], session="s2"), 1)
+            self.assertNotEqual(self.pick(e, [7], session="s1"), self.pick(e, [7], session="s2"))
+        e.slot_busy = [True, True]                              # pressure: both slots in use
+        self.assertIsNone(self.pick(e, [7], session="s3"))
+        e.slot_busy = [True, False]
+        self.assertEqual(self.pick(e, [7], session="s3"), 1)    # only slot 1 is free: s3 takes it
+        e.slot_busy = [False, False]
+        e.slot_used = [1.0, 5.0]                                # slot 0 saw its turn further back than slot 1
+        self.assertEqual(self.pick(e, [7], session="s3"), 0)    # none unowned: the OLDEST-used owned slot
+        e.claim_slot(0, "s3")                                   # the claim is the displacement
+        self.assertNotIn("s1", e.session_slot)                  # the oldest binding is gone...
+        self.assertEqual(e.session_slot.get("s2"), 1)           # ...and the newer one stands
+        self.assertEqual(e.slot_owner, {0: "s3", 1: "s2"})
+
     def test_claiming_frees_the_sessions_previous_slot(self):
         e = self.engine(3)
         e.claim_slot(0, "s1")
