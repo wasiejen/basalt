@@ -367,11 +367,13 @@ int main() {
         const size_t before = cache.evictions();
         auto huge = image({5, 6, 7});
         huge.live.state_a.resize(one * 3);        // over the whole budget on its own
-        cache.put_slot(std::move(huge), 1);
+        check(!cache.put_slot(std::move(huge), 1), "pin on: the oversized idle park answers put()'s refusal");
         check(cache.size() == 1 && cache.slot_size() == 0 && cache.evictions() == before &&
                   cache.best(a, {}, true).tokens == 3 &&
                   cache.best(std::vector<int64_t>{5, 6, 7, 8}, {}, true).tokens == 0,
               "pin on: the oversized idle park is refused and the cache stays put");
+        check(cache.put_slot(image({9, 8, 7}), 1) && cache.slot_size() == 1,
+              "pin on: an idle park that fits answers true");
     }
     {   // toggled off on a live cache holding charged bytes: the f63e3e21 split returns, no rebuild needed
         const size_t one = image({1, 2, 3}).bytes();

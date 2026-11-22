@@ -424,8 +424,9 @@ public:
     /// takes the longest parked conversations of either kind with it until the count and the bytes fit again -
     /// the retained K/V counts against the bytes like make_room counts it, and goes first as its first relief.
     /// An image over the whole budget is refused the way put() refuses one: the cache stays as it was.
-    void put_slot(SavedConversation&& image, size_t keep) {
-        if (slot_pin_ && enabled() && image.bytes() > budget_) return;   // put()'s refusal, mirrored: nothing evicts to fit
+    /// The answer is put()'s channel too: false is that refusal, observable by the caller; true is the parked image.
+    bool put_slot(SavedConversation&& image, size_t keep) {
+        if (slot_pin_ && enabled() && image.bytes() > budget_) return false;   // put()'s refusal, mirrored: nothing evicts to fit
         drop_superseded(image.live.ids, image.live.imgs, image.checkpoints, image.cvec);
         if (slot_pin_ && enabled()) {
             const size_t n = image.bytes();
@@ -439,6 +440,7 @@ public:
         bytes_ += n;
         slot_bytes_ += n;
         ++slot_count_;
+        return true;
     }
 
     /// With spilling on, what make_room evicts waits in take_spilled() for the tier below (the disk) instead of going.
