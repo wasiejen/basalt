@@ -35,8 +35,9 @@ when that slot is busy its request waits there instead of taking another one, so
 conversation in two slots. The engine's RAM cache reads the same flag on its own command line
 (`--conversation-cache-slot-pin`): on, a parked idle-slot conversation counts against both
 `conversation-cache-slots` and `conversation-cache-mib` like any other parked conversation, and the eviction takes
-the longest parked one of either kind; off, the idle lane keeps its own count cap outside the byte budget. An engine
-started through the server is not given the flag today: there the setting keys only the server's own scheduler.
+the longest parked one of either kind; off, the idle lane keeps its own count cap outside the byte budget. Started
+through the server, the engine is given the flag whenever the setting is on, and an engine binary without it refuses
+the start by the named flag check.
 
 A client that stamps each of its sessions with a header of its own, beside a shared one it gives a session and its
 subagents, is set best as a pair; OpenCode stamps `x-opencode-session-id` per session and `x-session-id` for a whole

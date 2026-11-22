@@ -270,9 +270,10 @@ class ProcessEngine:
                  slot_pin: bool = False):
         self.spawn = (engine_bin, list(args), cwd, log, env)   # to start it again
         self.model_path = flag_value(args, "--model") or ""
-        # the two slot knobs, both the server's own settings handed over at construction (the engine knows
-        # neither of them as a flag): the pin keeps a session to the slot it owns, and the identity names say
-        # which headers the server keyed its sessions by
+        # the two slot knobs, both the server's own settings handed over at construction: the pin keeps a
+        # session to the slot it owns (when the setting is on the server also hands the engine its
+        # --conversation-cache-slot-pin word), and the identity names say which headers the server keyed its
+        # sessions by
         if "slot_pin" not in self.__dict__:         # a restart re-runs this with the same words, not with
             self.slot_pin = bool(slot_pin)           # the server's settings: keep what it first got
         if "slot_identity" not in self.__dict__:

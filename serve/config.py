@@ -28,6 +28,9 @@ MODEL_OPTIONS = frozenset({
     "presence-penalty", "frequency-penalty", "repetition-penalty", "penalty-last-n", "seed", "video-max-tokens"})
 # the engine section's settings the WHOLE SERVER reads: no model picks its own, and they are never engine words
 ENGINE_SERVER_OPTIONS = frozenset({"conversation-cache-slot-identity", "conversation-cache-slot-pin"})
+# of those, the ones the server ALSO hands to the engine as its own flag (ruling 2026-11-22): true gives the
+# word, false or absent gives none, and an engine binary without the flag fails the named check_engine_flags start
+SERVER_READ_ENGINE_WORDS = frozenset({"conversation-cache-slot-pin"})
 GRAMMAR_DEFAULT = True                      # the `grammar` option when neither the file nor the command line sets it
 
 
@@ -212,6 +215,8 @@ def load_config_file(path: str, ap: argparse.ArgumentParser) -> ConfigFile:
             raise ValueError(f"engine.{key}: set it in a model entry")
         if name in MODEL_OPTIONS or name in ENGINE_SERVER_OPTIONS:
             shared_argv += option_words("engine", key, value, known[name], here)
+            if name in SERVER_READ_ENGINE_WORDS:
+                shared_words += engine_words(key, value)
         elif name in known:
             raise ValueError(f'engine.{key}: a server option, set it under "server"')
         else:

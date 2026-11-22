@@ -144,27 +144,32 @@ class ConfigFile(unittest.TestCase):
                       "conversation-cache-slot-identity": "X-Session-Id, x-opencode-session-id,x-session-id"})
         self.assertTrue(a[0].conversation_cache_slot_pin)
         self.assertEqual(a[0].conversation_cache_slot_identity, ("x-session-id", "x-opencode-session-id"))
+        self.assertIn("--conversation-cache-slot-pin", a[2])      # ruling 2026-11-22: true reaches the engine's words
+        self.assertNotIn("--conversation-cache-slot-pin", a[3])
         for words in (a[2], a[3]):
-            for word in ("--conversation-cache-slot-pin", "--conversation-cache-slot-identity",
-                         "x-opencode-session-id", "x-session-id"):
-                self.assertNotIn(word, words)
+            for word in ("--conversation-cache-slot-identity", "x-opencode-session-id", "x-session-id"):
+                self.assertNotIn(word, words)                     # the identity stays the server's own
         a = settings({})
         self.assertFalse(a[0].conversation_cache_slot_pin)
         self.assertEqual(a[0].conversation_cache_slot_identity, ())
+        for words in (a[2], a[3]):
+            self.assertNotIn("--conversation-cache-slot-pin", words)   # false or absent: no word
         for key in ("conversation-cache-slot-identity", "conversation-cache-slot-pin"):
             with self.assertRaisesRegex(ValueError, "the whole server reads it once"):
                 model_settings(build_parser(), ["--config", conf({"models": [{"model": "a.basalt", key: True}]})])
 
-    def test_a_configured_pin_reaches_the_engine_and_not_its_argv(self):
-        """The pin set in the config file reaches the engine the way the server builds one, and the word never
-        enters the engine's argv: an engine that has no such flag still starts with the pin on."""
+    def test_a_configured_pin_reaches_the_engine_and_its_argv(self):
+        """The pin set in the config file reaches the engine both ways the server builds one (ruling 2026-11-22):
+        as the engine's own argv word, so a binary without the flag fails the named check_engine_flags start, and
+        as the server scheduler's setting, which no argv word of its own sets."""
         from serve.engine.process import ProcessEngine
         a, _, file_words, cli_words = model_settings(build_parser(), ["--config", conf(
             {"engine": {"conversation-cache-slot-pin": True}, "models": [{"model": "a.basalt"}]})])[0]
         self.assertTrue(a.conversation_cache_slot_pin)
-        self.assertNotIn("--conversation-cache-slot-pin", file_words + cli_words)
+        self.assertIn("--conversation-cache-slot-pin", file_words)
+        self.assertNotIn("--conversation-cache-slot-pin", cli_words)
         self.assertFalse(ProcessEngine("missing-executable", file_words, lazy=True).slot_pin)
-        self.assertTrue(ProcessEngine("missing-executable", [], lazy=True,
+        self.assertTrue(ProcessEngine("missing-executable", file_words, lazy=True,
                                       slot_pin=a.conversation_cache_slot_pin).slot_pin)
 
     def test_the_ram_reserve(self):
