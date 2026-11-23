@@ -6,7 +6,7 @@ set "ROOT=%~dpf1"
 if "%ROOT%"=="" set "ROOT=D:\AI\runtimes\basalt_clone"
 set "BUILD_DIR=%ROOT%\build"
 set "BIN_DIR=%ROOT%\bin"
-set "BIN_OLD_DIR=%ROOT%\bin\backup"
+set "BIN_OLD_DIR=%ROOT%\bin_"
 
 
 cd /d "%ROOT%" || goto :fail
