@@ -101,7 +101,7 @@ set "OLD=none"
 if exist "%STAMP%" set /p "OLD="<"%STAMP%"
 if defined DIRTY (
   echo [greedy] %T%: DIRTY tree - building without stamp, fix before claiming results
-  call "%RT%\build_basalt_minimal.bat" "%T%" || (endlocal & exit /b 1)
+  call "%RT%\basalt-scripts\build_basalt_minimal.bat" "%T%" || (endlocal & exit /b 1)
   endlocal & exit /b 0
 )
 if "%OLD%"=="%H%" (
@@ -109,6 +109,6 @@ if "%OLD%"=="%H%" (
   endlocal & exit /b 0
 )
 echo [greedy] %T%: building at !H:~0,8! ...
-call "%RT%\build_basalt_minimal.bat" "%T%" || (endlocal & exit /b 1)
+call "%RT%\basalt-scripts\build_basalt_minimal.bat" "%T%" || (endlocal & exit /b 1)
 > "%STAMP%" echo %H%
 endlocal & exit /b 0
