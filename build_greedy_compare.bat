@@ -4,6 +4,7 @@ rem === basalt greedy compare: base checks, build-if-changed, llama-swap-coordin
 rem usage: build_greedy_compare.bat          -> build changed trees + control + harness
 rem        build_greedy_compare.bat build    -> base checks + builds only
 rem        build_greedy_compare.bat compare  -> base checks + control + harness (builds skipped)
+rem        build_greedy_compare.bat check    -> origin sync + base checks only (no builds, no harness, no llama-swap)
 set "RT=D:\AI\runtimes"
 set "MAIN=%RT%\basalt-main"
 set "FEAT=%RT%\basalt-squash"
@@ -14,6 +15,12 @@ rem If llama-swap has an api key: uncomment and set:
 rem set "LAUTH=-H "Authorization: Bearer YOUR_KEY""
 set "MODE=%~1"
 pushd "%RT%"
+
+rem ---- 0) origin sync: both trees must MATCH origin (auto fast-forward) -----
+call :sync "%MAIN%" main
+if errorlevel 1 (popd & exit /b 1)
+call :sync "%FEAT%" "%FEAT_BRANCH%"
+if errorlevel 1 (popd & exit /b 1)
 
 rem ---- 1) feature tree on the expected branch ----------------------------
 for /f "delims=" %%b in ('git -C "%FEAT%" rev-parse --abbrev-ref HEAD') do set "FB=%%b"
@@ -34,6 +41,7 @@ if errorlevel 1 (
   popd & exit /b 1
 )
 echo [greedy] base OK: main tip !MH:~0,8! is the merge-base of %FEAT_BRANCH%
+if /i "%MODE%"=="check" (echo [greedy] check mode: sync + base checks green - no builds, no harness, no llama-swap. & popd & exit /b 0)
 
 rem ---- 3) builds (skipped in compare-only mode) ---------------------------
 if /i not "%MODE%"=="compare" (
@@ -111,4 +119,34 @@ if "%OLD%"=="%H%" (
 echo [greedy] %T%: building at !H:~0,8! ...
 call "%RT%\basalt-scripts\build_basalt_minimal.bat" "%T%" || (endlocal & exit /b 1)
 > "%STAMP%" echo %H%
+endlocal & exit /b 0
+
+:sync
+rem usage: call :sync <tree> <branch>  - tree must sit exactly on origin/<branch>; ff-only auto-align, never merge, never touch dirty/diverged
+setlocal EnableExtensions EnableDelayedExpansion
+set "T=%~1"
+set "SB=%~2"
+git -C "%T%" fetch -q origin "%SB%"
+if errorlevel 1 (
+  echo [greedy] ABORT: git fetch origin %SB% in %T% failed - no network or bad branch.
+  endlocal & exit /b 1
+)
+for /f "delims=" %%h in ('git -C "%T%" rev-parse "origin/%SB%"') do set "OH=%%h"
+for /f "delims=" %%h in ('git -C "%T%" rev-parse HEAD') do set "LH=%%h"
+if "%LH%"=="%OH%" (
+  echo [greedy] %T%: at origin/%SB% !OH:~0,8!.
+  endlocal & exit /b 0
+)
+set "DIRTY="
+for /f "delims=" %%l in ('git -C "%T%" status --porcelain') do set "DIRTY=1"
+if defined DIRTY (
+  echo [greedy] ABORT: %T% differs from origin/%SB% AND the tree is dirty - commit or stash first.
+  endlocal & exit /b 1
+)
+git -C "%T%" merge --ff-only "origin/%SB%" >nul 2>&1
+if errorlevel 1 (
+  echo [greedy] ABORT: %T% has diverged from origin/%SB% ^(local commits or detached HEAD^) - not touched, resolve manually.
+  endlocal & exit /b 1
+)
+echo [greedy] %T%: local was stale - fast-forwarded to origin/%SB% !OH:~0,8!.
 endlocal & exit /b 0
