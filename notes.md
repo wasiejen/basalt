@@ -1,3 +1,17 @@
+# 2026-11-25_16-32 force push a branch onto another
+git -C D:/AI/runtimes/basalt-squash push --force-with-lease origin feat/slot-pin-rebased-v3:feat/slot-pin-integrated
+
+# 2026-11-23_17-15 update my_build based on another branch
+
+git -C D:\AI\runtimes\basalt_clone status --short            (if dirty: commit or stash first)
+git -C D:\AI\runtimes\basalt_clone branch my_build-legacy
+git -C D:\AI\runtimes\basalt_clone checkout my_build
+if merge is needed to resolve:
+git -C D:\AI\runtimes\basalt_clone push --force-with-lease origin my_build
+finish with hard reset to the desired branc
+git -C D:\AI\runtimes\basalt_clone reset --hard <branch>
+
+
 # 2026-11-23_16-14 how to create this repo
 PS D:\AI\runtimes> git init D:\AI\runtimes\basalt-scripts
 PS D:\AI\runtimes> git -C D:\AI\runtimes\basalt-scripts remote add origin https://github.com/wasiejen/basalt
